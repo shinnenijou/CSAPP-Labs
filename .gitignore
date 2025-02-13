@@ -32,4 +32,7 @@
 *.app
 
 #cmake
-cmake-build-debug
+0_Assignment/cmake-build-debug
+
+# some old src
+oldsrc

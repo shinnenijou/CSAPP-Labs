@@ -1,0 +1,9 @@
+CMAKE_MINIMUM_REQUIRED(VERSION 3.5)
+
+PROJECT(0_Assignment
+        LANGUAGES C
+)
+
+SET(CMAKE_C_STANDARD 17)
+
+add_library(ch2 ch2.c)
