@@ -1172,6 +1172,36 @@ Disassembly of section .text:
   400fc9:	48 83 c4 18          	add    $0x18,%rsp
   400fcd:	c3                   	ret    
 
+// unsigned func4(unsigned a, unsigned b, unsigned c)
+// {
+//    int x = c;      // mov    %edx,%eax
+//    x -= b;         // sub    %esi,%eax
+//    unsigned y = x; // mov    %eax,%ecx
+//    y >>= 0x1f;     // shr    $0x1f,%ecx
+//    x += y;         // add    %ecx,%eax
+//    x >>= 1;        // sar    %eax
+//    y = x + b;      // lea    (%rax,%rsi,1),%ecx
+//    // y = ROUND_TO_ZERO((c + b) / 2)
+//    
+//    if (y <= a)     // cmp    %edi,%ecx
+//    {               // jle    400ff2
+//        if (y >= a) // cmp    %edi,%ecx
+//        {
+//            return 0; // mov    $0x0,%eax
+//        }
+//        else
+//        {
+//            b = y + 0x1;               // 0x1(%rcx),%esi
+//            int temp = func4(a, b, c); // call   400fce <func4>
+//            return temp + temp + 0x1;  // lea    0x1(%rax,%rax,1),%eax
+//        }
+//    }
+//
+//    c = y - 0x1;               // -0x1(%rcx),%edx
+//    int temp = func4(a, b, c); // call   400fce <func4>
+//    return temp + temp;        // add    %eax,%eax
+//}
+
 0000000000400fce <func4>:
   400fce:	48 83 ec 08          	sub    $0x8,%rsp
   400fd2:	89 d0                	mov    %edx,%eax
@@ -1198,23 +1228,23 @@ Disassembly of section .text:
 
 000000000040100c <phase_4>:
   40100c:	48 83 ec 18          	sub    $0x18,%rsp
-  401010:	48 8d 4c 24 0c       	lea    0xc(%rsp),%rcx
-  401015:	48 8d 54 24 08       	lea    0x8(%rsp),%rdx
-  40101a:	be cf 25 40 00       	mov    $0x4025cf,%esi
+  401010:	48 8d 4c 24 0c       	lea    0xc(%rsp),%rcx     // second scan
+  401015:	48 8d 54 24 08       	lea    0x8(%rsp),%rdx     // first scan
+  40101a:	be cf 25 40 00       	mov    $0x4025cf,%esi     // %d %d
   40101f:	b8 00 00 00 00       	mov    $0x0,%eax
   401024:	e8 c7 fb ff ff       	call   400bf0 <__isoc99_sscanf@plt>
   401029:	83 f8 02             	cmp    $0x2,%eax
   40102c:	75 07                	jne    401035 <phase_4+0x29>
-  40102e:	83 7c 24 08 0e       	cmpl   $0xe,0x8(%rsp)
-  401033:	76 05                	jbe    40103a <phase_4+0x2e>
+  40102e:	83 7c 24 08 0e       	cmpl   $0xe,0x8(%rsp)     
+  401033:	76 05                	jbe    40103a <phase_4+0x2e> // first scan <= 0xe
   401035:	e8 00 04 00 00       	call   40143a <explode_bomb>
-  40103a:	ba 0e 00 00 00       	mov    $0xe,%edx
+  40103a:	ba 0e 00 00 00       	mov    $0xe,%edx  
   40103f:	be 00 00 00 00       	mov    $0x0,%esi
   401044:	8b 7c 24 08          	mov    0x8(%rsp),%edi
-  401048:	e8 81 ff ff ff       	call   400fce <func4>
-  40104d:	85 c0                	test   %eax,%eax
+  401048:	e8 81 ff ff ff       	call   400fce <func4> // func4(first scan, 0x0, 0xe)
+  40104d:	85 c0                	test   %eax,%eax      // test return value equals to 0x1
   40104f:	75 07                	jne    401058 <phase_4+0x4c>
-  401051:	83 7c 24 0c 00       	cmpl   $0x0,0xc(%rsp)
+  401051:	83 7c 24 0c 00       	cmpl   $0x0,0xc(%rsp) // compare 0 with second scan. 
   401056:	74 05                	je     40105d <phase_4+0x51>
   401058:	e8 dd 03 00 00       	call   40143a <explode_bomb>
   40105d:	48 83 c4 18          	add    $0x18,%rsp
