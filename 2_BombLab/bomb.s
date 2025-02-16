@@ -1226,6 +1226,21 @@ Disassembly of section .text:
   401007:	48 83 c4 08          	add    $0x8,%rsp
   40100b:	c3                   	ret    
 
+// Phase 4: func4(0x1, 0x0, 0xe) = 0
+// Phase 4: func4(0x1, 0x0, 0xe) = 0
+// Phase 4: func4(0x2, 0x0, 0xe) = 4
+// Phase 4: func4(0x3, 0x0, 0xe) = 0
+// Phase 4: func4(0x4, 0x0, 0xe) = 2
+// Phase 4: func4(0x5, 0x0, 0xe) = 2
+// Phase 4: func4(0x6, 0x0, 0xe) = 6
+// Phase 4: func4(0x7, 0x0, 0xe) = 0
+// Phase 4: func4(0x8, 0x0, 0xe) = 1
+// Phase 4: func4(0x9, 0x0, 0xe) = 1
+// Phase 4: func4(0xa, 0x0, 0xe) = 5
+// Phase 4: func4(0xb, 0x0, 0xe) = 1
+// Phase 4: func4(0xc, 0x0, 0xe) = 3
+// Phase 4: func4(0xd, 0x0, 0xe) = 3
+// Phase 4: func4(0xe, 0x0, 0xe) = 7
 000000000040100c <phase_4>:
   40100c:	48 83 ec 18          	sub    $0x18,%rsp
   401010:	48 8d 4c 24 0c       	lea    0xc(%rsp),%rcx     // second scan
@@ -1242,8 +1257,8 @@ Disassembly of section .text:
   40103f:	be 00 00 00 00       	mov    $0x0,%esi
   401044:	8b 7c 24 08          	mov    0x8(%rsp),%edi
   401048:	e8 81 ff ff ff       	call   400fce <func4> // func4(first scan, 0x0, 0xe)
-  40104d:	85 c0                	test   %eax,%eax      // test return value equals to 0x1
-  40104f:	75 07                	jne    401058 <phase_4+0x4c>
+  40104d:	85 c0                	test   %eax,%eax      // test return value equals to 0
+  40104f:	75 07                	jne    401058 <phase_4+0x4c> // if not equals to 0 then explode. thus any value which makes func4 returning 0 is the key
   401051:	83 7c 24 0c 00       	cmpl   $0x0,0xc(%rsp) // compare 0 with second scan. 
   401056:	74 05                	je     40105d <phase_4+0x51>
   401058:	e8 dd 03 00 00       	call   40143a <explode_bomb>
