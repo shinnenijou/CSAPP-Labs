@@ -1269,37 +1269,42 @@ Disassembly of section .text:
   401062:	53                   	push   %rbx
   401063:	48 83 ec 20          	sub    $0x20,%rsp
   401067:	48 89 fb             	mov    %rdi,%rbx
-  40106a:	64 48 8b 04 25 28 00 	mov    %fs:0x28,%rax
+  40106a:	64 48 8b 04 25 28 00 	mov    %fs:0x28,%rax                // %fs Thread Local Storage register. what is the value?
   401071:	00 00 
   401073:	48 89 44 24 18       	mov    %rax,0x18(%rsp)
   401078:	31 c0                	xor    %eax,%eax
-  40107a:	e8 9c 02 00 00       	call   40131b <string_length>
-  40107f:	83 f8 06             	cmp    $0x6,%eax
+  40107a:	e8 9c 02 00 00       	call   40131b <string_length>       // %rdi: input string
+  40107f:	83 f8 06             	cmp    $0x6,%eax                    // strlen(input) ? 0x6
   401082:	74 4e                	je     4010d2 <phase_5+0x70>
-  401084:	e8 b1 03 00 00       	call   40143a <explode_bomb>
+  401084:	e8 b1 03 00 00       	call   40143a <explode_bomb>        // explode if not equals. thus strlen(input) == 6
   401089:	eb 47                	jmp    4010d2 <phase_5+0x70>
-  40108b:	0f b6 0c 03          	movzbl (%rbx,%rax,1),%ecx
+  -----------------                                                 // %rax is something like iteration index here. denote i
+  +++++++++++++++++++++++
+  40108b:	0f b6 0c 03          	movzbl (%rbx,%rax,1),%ecx           // %rbx never changes thus always input string in %rbx . read a char from input string to %ecx
   40108f:	88 0c 24             	mov    %cl,(%rsp)
   401092:	48 8b 14 24          	mov    (%rsp),%rdx
-  401096:	83 e2 0f             	and    $0xf,%edx
-  401099:	0f b6 92 b0 24 40 00 	movzbl 0x4024b0(%rdx),%edx
-  4010a0:	88 54 04 10          	mov    %dl,0x10(%rsp,%rax,1)
-  4010a4:	48 83 c0 01          	add    $0x1,%rax
-  4010a8:	48 83 f8 06          	cmp    $0x6,%rax
-  4010ac:	75 dd                	jne    40108b <phase_5+0x29>
-  4010ae:	c6 44 24 16 00       	movb   $0x0,0x16(%rsp)
-  4010b3:	be 5e 24 40 00       	mov    $0x40245e,%esi
+  401096:	83 e2 0f             	and    $0xf,%edx                    // store current [low 4 bits] char in %rdx . denote input[i]
+  401099:	0f b6 92 b0 24 40 00 	movzbl 0x4024b0(%rdx),%edx          // use char value as an index to read 0x4024b0[input[i]]. 
+  4010a0:	88 54 04 10          	mov    %dl,0x10(%rsp,%rax,1)        // write to stack. what this loop do is map input string to a new string via a map(0x4024b0) using char value as index
+  4010a4:	48 83 c0 01          	add    $0x1,%rax                    // ++i
+  4010a8:	48 83 f8 06          	cmp    $0x6,%rax                    // loop condition
+  4010ac:	75 dd                	jne    40108b <phase_5+0x29>        // loop if i != 0x6
+  ++++++++++++++++++++++++
+  4010ae:	c6 44 24 16 00       	movb   $0x0,0x16(%rsp)              // set up end of string(\0)
+  4010b3:	be 5e 24 40 00       	mov    $0x40245e,%esi               // string $0x40245e: flyers...
   4010b8:	48 8d 7c 24 10       	lea    0x10(%rsp),%rdi
   4010bd:	e8 76 02 00 00       	call   401338 <strings_not_equal>
-  4010c2:	85 c0                	test   %eax,%eax
-  4010c4:	74 13                	je     4010d9 <phase_5+0x77>
-  4010c6:	e8 6f 03 00 00       	call   40143a <explode_bomb>
+  4010c2:	85 c0                	test   %eax,%eax                // %eax ? 0
+  4010c4:	74 13                	je     4010d9 <phase_5+0x77>    // continue if %eax == 0 -> strings are equal
+  4010c6:	e8 6f 03 00 00       	call   40143a <explode_bomb>    // explode if %eax == 1
   4010cb:	0f 1f 44 00 00       	nopl   0x0(%rax,%rax,1)
   4010d0:	eb 07                	jmp    4010d9 <phase_5+0x77>
+  -----------------
   4010d2:	b8 00 00 00 00       	mov    $0x0,%eax
   4010d7:	eb b2                	jmp    40108b <phase_5+0x29>
-  4010d9:	48 8b 44 24 18       	mov    0x18(%rsp),%rax
-  4010de:	64 48 33 04 25 28 00 	xor    %fs:0x28,%rax
+  -----------------
+  4010d9:	48 8b 44 24 18       	mov    0x18(%rsp),%rax  // result is stored at 0x18(%rsp)
+  4010de:	64 48 33 04 25 28 00 	xor    %fs:0x28,%rax  // do some computation then check the result with origin value to protect stack from attack
   4010e5:	00 00 
   4010e7:	74 05                	je     4010ee <phase_5+0x8c>
   4010e9:	e8 42 fa ff ff       	call   400b30 <__stack_chk_fail@plt>
@@ -1497,6 +1502,7 @@ Disassembly of section .text:
   401332:	b8 00 00 00 00       	mov    $0x0,%eax
   401337:	c3                   	ret    
 
+// return 0x1 if not equal
 0000000000401338 <strings_not_equal>:
   401338:	41 54                	push   %r12
   40133a:	55                   	push   %rbp
@@ -2735,6 +2741,14 @@ Disassembly of section .rodata:
   4024ad:	00 00                	add    %al,(%rax)
 	...
 
+// 0x4024b0 ~ 0x402530
+// search for 0x66, 0x6c, 0x79, 0x65, 0x72, 0x73
+// 0x66: 4024b9 -> 0x9 -> 0x69
+// 0x6c: 4024bf -> 0xf -> 0x6f
+// 0x79: 4024be -> 0xe -> 0x6e
+// 0x65: 4024b5 -> 0x5 -> 0x65
+// 0x72: 4024b6 -> 0x6 -> 0x66
+// 0x73: 4024b7 -> 0x7 -> 0x67
 00000000004024b0 <array.3449>:
   4024b0:	6d                   	insl   (%dx),%es:(%rdi)
   4024b1:	61                   	(bad)  
@@ -2745,6 +2759,7 @@ Disassembly of section .rodata:
   4024bb:	74 76                	je     402533 <array.3449+0x83>
   4024bd:	62                   	(bad)  
   4024be:	79 6c                	jns    40252c <array.3449+0x7c>
+  ---------------
   4024c0:	53                   	push   %rbx
   4024c1:	6f                   	outsl  %ds:(%rsi),(%dx)
   4024c2:	20 79 6f             	and    %bh,0x6f(%rcx)
