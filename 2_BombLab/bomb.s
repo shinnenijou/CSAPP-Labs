@@ -1321,78 +1321,98 @@ Disassembly of section .text:
   4010fc:	48 83 ec 50          	sub    $0x50,%rsp
   401100:	49 89 e5             	mov    %rsp,%r13
   401103:	48 89 e6             	mov    %rsp,%rsi
-  401106:	e8 51 03 00 00       	call   40145c <read_six_numbers>
+  401106:	e8 51 03 00 00       	call   40145c <read_six_numbers> // read 6 integer then store at stack top. denote nums[0] ~ nums[5]
   40110b:	49 89 e6             	mov    %rsp,%r14
-  40110e:	41 bc 00 00 00 00    	mov    $0x0,%r12d
+  40110e:	41 bc 00 00 00 00    	mov    $0x0,%r12d               // init %r12, denote j. lockstep with i
+  ++++++++++++++++ iterate across nums[i]
   401114:	4c 89 ed             	mov    %r13,%rbp
-  401117:	41 8b 45 00          	mov    0x0(%r13),%eax
+  401117:	41 8b 45 00          	mov    0x0(%r13),%eax           // note %r13 is caller owned. so will not change after procedure call. thus still point to stack top.
   40111b:	83 e8 01             	sub    $0x1,%eax
   40111e:	83 f8 05             	cmp    $0x5,%eax
-  401121:	76 05                	jbe    401128 <phase_6+0x34>
-  401123:	e8 12 03 00 00       	call   40143a <explode_bomb>
-  401128:	41 83 c4 01          	add    $0x1,%r12d
-  40112c:	41 83 fc 06          	cmp    $0x6,%r12d
-  401130:	74 21                	je     401153 <phase_6+0x5f>
-  401132:	44 89 e3             	mov    %r12d,%ebx
+  401121:	76 05                	jbe    401128 <phase_6+0x34>    // if (nums[i] <= 6)
+  401123:	e8 12 03 00 00       	call   40143a <explode_bomb>    // explode if nums[i] > 6
+  401128:	41 83 c4 01          	add    $0x1,%r12d               // ++j
+  40112c:	41 83 fc 06          	cmp    $0x6,%r12d               // if j == 0x6
+  401130:	74 21                	je     401153 <phase_6+0x5f>    // break
+  401132:	44 89 e3             	mov    %r12d,%ebx               // init k = j
+  ---------------- iterate across nums[k]
   401135:	48 63 c3             	movslq %ebx,%rax
-  401138:	8b 04 84             	mov    (%rsp,%rax,4),%eax
+  401138:	8b 04 84             	mov    (%rsp,%rax,4),%eax       // nums[k]
   40113b:	39 45 00             	cmp    %eax,0x0(%rbp)
-  40113e:	75 05                	jne    401145 <phase_6+0x51>
+  40113e:	75 05                	jne    401145 <phase_6+0x51>    // if nums[k] != nums[i]
   401140:	e8 f5 02 00 00       	call   40143a <explode_bomb>
-  401145:	83 c3 01             	add    $0x1,%ebx
+  401145:	83 c3 01             	add    $0x1,%ebx                // ++k
   401148:	83 fb 05             	cmp    $0x5,%ebx
-  40114b:	7e e8                	jle    401135 <phase_6+0x41>
-  40114d:	49 83 c5 04          	add    $0x4,%r13
+  40114b:	7e e8                	jle    401135 <phase_6+0x41>    // if k + 1 <= 0x5
+  ----------------
+  40114d:	49 83 c5 04          	add    $0x4,%r13                // iterate over nums
   401151:	eb c1                	jmp    401114 <phase_6+0x20>
-  401153:	48 8d 74 24 18       	lea    0x18(%rsp),%rsi
-  401158:	4c 89 f0             	mov    %r14,%rax
+  ++++++++++++++++
+
+
+  401153:	48 8d 74 24 18       	lea    0x18(%rsp),%rsi      // loop condition
+  401158:	4c 89 f0             	mov    %r14,%rax            // %r14 is caller owned. equals to %rsp
   40115b:	b9 07 00 00 00       	mov    $0x7,%ecx
-  401160:	89 ca                	mov    %ecx,%edx
-  401162:	2b 10                	sub    (%rax),%edx
-  401164:	89 10                	mov    %edx,(%rax)
-  401166:	48 83 c0 04          	add    $0x4,%rax
-  40116a:	48 39 f0             	cmp    %rsi,%rax
-  40116d:	75 f1                	jne    401160 <phase_6+0x6c>
-  40116f:	be 00 00 00 00       	mov    $0x0,%esi
+  ++++++++++++++++ iterate acrossn nums[i]
+  401160:	89 ca                	mov    %ecx,%edx            
+  401162:	2b 10                	sub    (%rax),%edx          // 7 - nums[i]
+  401164:	89 10                	mov    %edx,(%rax)          // nums[i] = ...
+  401166:	48 83 c0 04          	add    $0x4,%rax            // ++i
+  40116a:	48 39 f0             	cmp    %rsi,%rax            
+  40116d:	75 f1                	jne    401160 <phase_6+0x6c>  // if i != 6
+  ++++++++++++++++
+
+  40116f:	be 00 00 00 00       	mov    $0x0,%esi              // init i = 0
   401174:	eb 21                	jmp    401197 <phase_6+0xa3>
-  401176:	48 8b 52 08          	mov    0x8(%rdx),%rdx
-  40117a:	83 c0 01             	add    $0x1,%eax
+  ---------------
+  401176:	48 8b 52 08          	mov    0x8(%rdx),%rdx         // global linked list: 0x6032d0 -> 0x6032e0 -> 0x6032f0 -> 0x603300 -> 0x603310 -> 0x603320 -> 0x0
+  40117a:	83 c0 01             	add    $0x1,%eax              
   40117d:	39 c8                	cmp    %ecx,%eax
   40117f:	75 f5                	jne    401176 <phase_6+0x82>
-  401181:	eb 05                	jmp    401188 <phase_6+0x94>
+  401181:	eb 05                	jmp    401188 <phase_6+0x94> // find nums[i]th node
+  +++++++++++++++
   401183:	ba d0 32 60 00       	mov    $0x6032d0,%edx
-  401188:	48 89 54 74 20       	mov    %rdx,0x20(%rsp,%rsi,2)
+  401188:	48 89 54 74 20       	mov    %rdx,0x20(%rsp,%rsi,2)   // store node's address at 0x20(%rsp)~0x50(%rsp)
   40118d:	48 83 c6 04          	add    $0x4,%rsi
   401191:	48 83 fe 18          	cmp    $0x18,%rsi
   401195:	74 14                	je     4011ab <phase_6+0xb7>
-  401197:	8b 0c 34             	mov    (%rsp,%rsi,1),%ecx
-  40119a:	83 f9 01             	cmp    $0x1,%ecx
-  40119d:	7e e4                	jle    401183 <phase_6+0x8f>
+  401197:	8b 0c 34             	mov    (%rsp,%rsi,1),%ecx       // ((char*)nums)[i] 
+  40119a:	83 f9 01             	cmp    $0x1,%ecx                // machine is little-endian thus %ecx is the least significant byte of number
+  40119d:	7e e4                	jle    401183 <phase_6+0x8f>    // if ((char*)nums)[i] <= 1
+  +++++++++++++++
   40119f:	b8 01 00 00 00       	mov    $0x1,%eax
   4011a4:	ba d0 32 60 00       	mov    $0x6032d0,%edx
   4011a9:	eb cb                	jmp    401176 <phase_6+0x82>
-  4011ab:	48 8b 5c 24 20       	mov    0x20(%rsp),%rbx
-  4011b0:	48 8d 44 24 28       	lea    0x28(%rsp),%rax
-  4011b5:	48 8d 74 24 50       	lea    0x50(%rsp),%rsi
+  ---------------
+
+  4011ab:	48 8b 5c 24 20       	mov    0x20(%rsp),%rbx        // first node address
+  4011b0:	48 8d 44 24 28       	lea    0x28(%rsp),%rax        // pointer to stack which store the second node address
+  4011b5:	48 8d 74 24 50       	lea    0x50(%rsp),%rsi        // loop terminate
   4011ba:	48 89 d9             	mov    %rbx,%rcx
+  ================= 
   4011bd:	48 8b 10             	mov    (%rax),%rdx
-  4011c0:	48 89 51 08          	mov    %rdx,0x8(%rcx)
-  4011c4:	48 83 c0 08          	add    $0x8,%rax
+  4011c0:	48 89 51 08          	mov    %rdx,0x8(%rcx)       // node->next = next
+  4011c4:	48 83 c0 08          	add    $0x8,%rax            // next node
   4011c8:	48 39 f0             	cmp    %rsi,%rax
   4011cb:	74 05                	je     4011d2 <phase_6+0xde>
   4011cd:	48 89 d1             	mov    %rdx,%rcx
   4011d0:	eb eb                	jmp    4011bd <phase_6+0xc9>
+  =================
   4011d2:	48 c7 42 08 00 00 00 	movq   $0x0,0x8(%rdx)
+
   4011d9:	00 
-  4011da:	bd 05 00 00 00       	mov    $0x5,%ebp
-  4011df:	48 8b 43 08          	mov    0x8(%rbx),%rax
-  4011e3:	8b 00                	mov    (%rax),%eax
-  4011e5:	39 03                	cmp    %eax,(%rbx)
-  4011e7:	7d 05                	jge    4011ee <phase_6+0xfa>
-  4011e9:	e8 4c 02 00 00       	call   40143a <explode_bomb>
+  4011da:	bd 05 00 00 00       	mov    $0x5,%ebp              // init i = 5
+  ------------                                                // %rbx: new list head node address
+  4011df:	48 8b 43 08          	mov    0x8(%rbx),%rax         // node = head->next
+  4011e3:	8b 00                	mov    (%rax),%eax            // node->val ?
+  4011e5:	39 03                	cmp    %eax,(%rbx)            // head->val ? node->val . NOTE: compare 32bits here
+  4011e7:	7d 05                	jge    4011ee <phase_6+0xfa>  // if head->val >= node->val
+  4011e9:	e8 4c 02 00 00       	call   40143a <explode_bomb>  // explode if head->val < node->val
   4011ee:	48 8b 5b 08          	mov    0x8(%rbx),%rbx
   4011f2:	83 ed 01             	sub    $0x1,%ebp
-  4011f5:	75 e8                	jne    4011df <phase_6+0xeb>
+  4011f5:	75 e8                	jne    4011df <phase_6+0xeb>  // if i != 0
+  ------------
+  
   4011f7:	48 83 c4 50          	add    $0x50,%rsp
   4011fb:	5b                   	pop    %rbx
   4011fc:	5d                   	pop    %rbp
@@ -1700,29 +1720,29 @@ Disassembly of section .text:
   4015cf:	00 00 
   4015d1:	48 89 44 24 68       	mov    %rax,0x68(%rsp)
   4015d6:	31 c0                	xor    %eax,%eax
-  4015d8:	83 3d 81 21 20 00 06 	cmpl   $0x6,0x202181(%rip)        # 603760 <num_input_strings>
+  4015d8:	83 3d 81 21 20 00 06 	cmpl   $0x6,0x202181(%rip)        # 603760 <num_input_strings> (global variable). increments when read_line
   4015df:	75 5e                	jne    40163f <phase_defused+0x7b>
-  4015e1:	4c 8d 44 24 10       	lea    0x10(%rsp),%r8
-  4015e6:	48 8d 4c 24 0c       	lea    0xc(%rsp),%rcx
-  4015eb:	48 8d 54 24 08       	lea    0x8(%rsp),%rdx
-  4015f0:	be 19 26 40 00       	mov    $0x402619,%esi
-  4015f5:	bf 70 38 60 00       	mov    $0x603870,%edi
+  4015e1:	4c 8d 44 24 10       	lea    0x10(%rsp),%r8             // 5th argument
+  4015e6:	48 8d 4c 24 0c       	lea    0xc(%rsp),%rcx             // 4th argument
+  4015eb:	48 8d 54 24 08       	lea    0x8(%rsp),%rdx             // 3rd argument
+  4015f0:	be 19 26 40 00       	mov    $0x402619,%esi             // format: %d %d %s
+  4015f5:	bf 70 38 60 00       	mov    $0x603870,%edi             // input: attack lab?
   4015fa:	e8 f1 f5 ff ff       	call   400bf0 <__isoc99_sscanf@plt>
   4015ff:	83 f8 03             	cmp    $0x3,%eax
   401602:	75 31                	jne    401635 <phase_defused+0x71>
-  401604:	be 22 26 40 00       	mov    $0x402622,%esi
+  401604:	be 22 26 40 00       	mov    $0x402622,%esi             // key string: DrEvil
   401609:	48 8d 7c 24 10       	lea    0x10(%rsp),%rdi
   40160e:	e8 25 fd ff ff       	call   401338 <strings_not_equal>
   401613:	85 c0                	test   %eax,%eax
-  401615:	75 1e                	jne    401635 <phase_defused+0x71>
+  401615:	75 1e                	jne    401635 <phase_defused+0x71>    // compare two strings. skip secret phase if not equal
   401617:	bf f8 24 40 00       	mov    $0x4024f8,%edi
-  40161c:	e8 ef f4 ff ff       	call   400b10 <puts@plt>
+  40161c:	e8 ef f4 ff ff       	call   400b10 <puts@plt>  // out: Curses, you've found the secret phase!
   401621:	bf 20 25 40 00       	mov    $0x402520,%edi
-  401626:	e8 e5 f4 ff ff       	call   400b10 <puts@plt>
+  401626:	e8 e5 f4 ff ff       	call   400b10 <puts@plt>  // out: But finding it and solving it are quite different...
   40162b:	b8 00 00 00 00       	mov    $0x0,%eax
-  401630:	e8 0d fc ff ff       	call   401242 <secret_phase>
-  401635:	bf 58 25 40 00       	mov    $0x402558,%edi
-  40163a:	e8 d1 f4 ff ff       	call   400b10 <puts@plt>
+  401630:	e8 0d fc ff ff       	call   401242 <secret_phase> 
+  401635:	bf 58 25 40 00       	mov    $0x402558,%edi     
+  40163a:	e8 d1 f4 ff ff       	call   400b10 <puts@plt>  // out: Congratulations! You've defused the bomb!
   40163f:	48 8b 44 24 68       	mov    0x68(%rsp),%rax
   401644:	64 48 33 04 25 28 00 	xor    %fs:0x28,%rax
   40164b:	00 00 
@@ -4018,6 +4038,7 @@ Disassembly of section .data:
   6032b0:	e9 03 00 00 00       	jmp    6032b8 <n48+0x8>
 	...
 
+// val: 0x14c
 00000000006032d0 <node1>:
   6032d0:	4c 01 00             	add    %r8,(%rax)
   6032d3:	00 01                	add    %al,(%rcx)
@@ -4027,6 +4048,7 @@ Disassembly of section .data:
   6032dc:	00 00                	add    %al,(%rax)
 	...
 
+// val: 0xa8
 00000000006032e0 <node2>:
   6032e0:	a8 00                	test   $0x0,%al
   6032e2:	00 00                	add    %al,(%rax)
@@ -4036,6 +4058,7 @@ Disassembly of section .data:
   6032ec:	00 00                	add    %al,(%rax)
 	...
 
+// val: 0x39c
 00000000006032f0 <node3>:
   6032f0:	9c                   	pushf  
   6032f1:	03 00                	add    (%rax),%eax
@@ -4046,6 +4069,7 @@ Disassembly of section .data:
   6032fc:	00 00                	add    %al,(%rax)
 	...
 
+// val: 0x2b3
 0000000000603300 <node4>:
   603300:	b3 02                	mov    $0x2,%bl
   603302:	00 00                	add    %al,(%rax)
@@ -4057,6 +4081,7 @@ Disassembly of section .data:
   60330d:	00 00                	add    %al,(%rax)
 	...
 
+// val: 0x1dd
 0000000000603310 <node5>:
   603310:	dd 01                	fldl   (%rcx)
   603312:	00 00                	add    %al,(%rax)
@@ -4065,6 +4090,7 @@ Disassembly of section .data:
   60331c:	00 00                	add    %al,(%rax)
 	...
 
+// val: 0x1bb
 0000000000603320 <node6>:
   603320:	bb 01 00 00 06       	mov    $0x6000001,%ebx
 	...
