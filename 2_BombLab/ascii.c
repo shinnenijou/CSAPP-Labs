@@ -31,11 +31,13 @@ unsigned func4(unsigned a, unsigned b, unsigned c)
     return temp + temp;        // add    %eax,%eax
 }
 
-typedef struct
+struct Node
 {
-    unsigned long long val;
-    NodePtr next;
-} Node, *NodePtr;
+    unsigned val;
+    struct Node *next;
+};
+
+typedef struct Node *NodePtr;
 
 NodePtr HEAD;
 
@@ -190,9 +192,6 @@ int main()
     printf("secret phase key: %s\n", secret_phase_key);
 
     // 0x402619
-    char secret_phase_format[] = {0x25, 0x64, 0x20, 0x25, 0x64, 0x20, 0x25, 0x73, '\0'};
-    printf("secret phase input: %s\n", secret_phase_format);
-
     char secret_phase_format[] = {0x25, 0x64, 0x20, 0x25, 0x64, 0x20, 0x25, 0x73, '\0'};
     printf("secret phase input: %s\n", secret_phase_format);
 
