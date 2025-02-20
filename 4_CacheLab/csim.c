@@ -252,7 +252,6 @@ void do_store(address_t address)
 {
     size_t set = get_set(address);
     address_t tag = get_tag(address);
-
     LinePtr p = find_line(set, tag);
 
     if (p)
@@ -264,11 +263,11 @@ void do_store(address_t address)
     cache_miss();
     bool evicted = insert_line(set, tag);
     cache_evict(evicted);
-    cache_hit();
 }
 
 void do_modify(address_t address)
 {
+    do_load(address);
     do_store(address);
 }
 
@@ -290,7 +289,7 @@ void do_trace(char type, address_t address)
     }
 }
 
-int run_sim()
+void run_sim()
 {
     char buffer[100];
     while (fgets(buffer, 99, file))
