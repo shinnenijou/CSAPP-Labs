@@ -137,27 +137,6 @@ size_t get_set(address_t address)
     return (address & set_mask) >> block_bit;
 }
 
-void move_line(size_t set, address_t tag)
-{
-    // input santitizaion guaranteed the first line is non-null
-    LinePtr prev = sets[set];
-    LinePtr node = prev->next;
-
-    while (node->next != NULL)
-    {
-        prev = node;
-        node = node->next;
-    }
-
-    // no neet to move line if target line is the first line
-    if (node != sets[set]->next)
-    {
-        prev->next = node->next;
-        node->next = sets[set]->next;
-        sets[set]->next = node;
-    }
-}
-
 LinePtr find_line(size_t set, address_t tag)
 {
     // input santitizaion guaranteed the first line is non-null
