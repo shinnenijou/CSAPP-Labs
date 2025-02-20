@@ -137,21 +137,53 @@ size_t get_set(address_t address)
     return (address & set_mask) >> block_bit;
 }
 
+void move_line(size_t set, address_t tag)
+{
+    // input santitizaion guaranteed the first line is non-null
+    LinePtr prev = sets[set];
+    LinePtr node = prev->next;
+
+    while (node->next != NULL)
+    {
+        prev = node;
+        node = node->next;
+    }
+
+    // no neet to move line if target line is the first line
+    if (node != sets[set]->next)
+    {
+        prev->next = node->next;
+        node->next = sets[set]->next;
+        sets[set]->next = node;
+    }
+}
+
 LinePtr find_line(size_t set, address_t tag)
 {
-    LinePtr node = sets[set]->next;
+    // input santitizaion guaranteed the first line is non-null
+    LinePtr prev = sets[set];
+    LinePtr node = prev->next;
 
     while (node != NULL)
     {
         if (node->tag == tag && node->valid)
         {
-            return node;
+            break;
         }
 
+        prev = node;
         node = node->next;
     }
 
-    return NULL;
+    // no neet to move line if target line is null or the first line
+    if (node != NULL && node != sets[set]->next)
+    {
+        prev->next = node->next;
+        node->next = sets[set]->next;
+        sets[set]->next = node;
+    }
+
+    return node;
 }
 
 bool insert_line(size_t set, address_t tag)
@@ -163,6 +195,11 @@ bool insert_line(size_t set, address_t tag)
 
     while (node->next != NULL)
     {
+        if (!node->valid)
+        {
+            break;
+        }
+
         prev = node;
         node = node->next;
     }
