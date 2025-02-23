@@ -12,20 +12,76 @@
 
 int is_transpose(int M, int N, int A[N][M], int B[M][N]);
 
+/////////// helper functions /////////////////
+
+// 5 local variables(include arguments)
+void swap_row(int row1[], int start1, int row2[], int start2, int count)
+{
+    int temp;
+
+    while (--count >= 0)
+    {
+        temp = row1[start1 + count];
+        row1[start1 + count] = row2[start2 + count];
+        row2[start2 + count] = temp;
+    }
+}
+
+// 5 local variables(include arguments)
+void copy_row(int src[], int src_begin, int dst[], int dst_begin, int count)
+{
+    while (--count >= 0)
+    {
+        dst[dst_begin + count] = src[src_begin + count];
+    }
+}
+
+// 9 local variables(include arguments)
+void internal_transpose(int i, int j, int size, int M, int N, int B[M][N])
+{
+    int temp, k, l;
+
+    for (k = 0; k < size; ++k)
+    {
+        for (l = k + 1; l < size; ++l)
+        {
+            temp = B[i + k][j + l];
+            B[i + k][j + l] = B[i + l][j + k];
+            B[i + l][j + k] = temp;
+        }
+    }
+}
+
+// 9 local variables(include arguments)
+void external_transpose(int i, int j, int size, int M, int N, int A[N][M], int B[M][N])
+{
+    int k, l;
+
+    for (k = i; k < i + size; ++k)
+    {
+        for (l = j; l < j + size; ++l)
+        {
+            B[l][k] = A[k][l];
+        }
+    }
+}
+
+////////////////////////////////////////////
+
 char transpose_32x32_desc[] = "Transpose with blocking n = 8";
 void transpose_32x32(int M, int N, int A[N][M], int B[M][N])
 {
-    int i, j, ki, kj;
+    int i, j, k, l;
 
     for (i = 0; i < N; i += 8)
     {
         for (j = 0; j < M; j += 8)
         {
-            for (ki = i; ki < i + 8; ++ki)
+            for (k = i; k < i + 8; ++k)
             {
-                for (kj = j; kj < j + 8; ++kj)
+                for (l = j; l < j + 8; ++l)
                 {
-                    B[kj][ki] = A[ki][kj];
+                    B[l][k] = A[k][l];
                 }
             }
         }
@@ -35,8 +91,7 @@ void transpose_32x32(int M, int N, int A[N][M], int B[M][N])
 char transpose_32x32_diagonal_desc[] = "Transpose with blocking n = 8 then special process along the diagonal";
 void transpose_32x32_diagonal(int M, int N, int A[N][M], int B[M][N])
 {
-    int i, j, ki, kj;
-    int temp0, temp1, temp2, temp3, temp4, temp5, temp6, temp7;
+    int i, j;
 
     for (i = 0; i < N; i += 8)
     {
@@ -47,38 +102,25 @@ void transpose_32x32_diagonal(int M, int N, int A[N][M], int B[M][N])
                 continue;
             }
 
-            for (ki = i; ki < i + 8; ++ki)
-            {
-                for (kj = j; kj < j + 8; ++kj)
-                {
-                    B[kj][ki] = A[ki][kj];
-                }
-            }
+            external_transpose(i, j, 8, M, N, A, B);
         }
     }
 
     for (i = 0; i < N; i += 8)
     {
-        for (ki = i; ki < i + 8; ++ki)
+        // copy A to B in reverse order
+        for (j = 0; j < 8; ++j)
         {
-            temp0 = A[ki][i];
-            temp1 = A[ki][i + 1];
-            temp2 = A[ki][i + 2];
-            temp3 = A[ki][i + 3];
-            temp4 = A[ki][i + 4];
-            temp5 = A[ki][i + 5];
-            temp6 = A[ki][i + 6];
-            temp7 = A[ki][i + 7];
-
-            B[i][ki] = temp0;
-            B[i + 1][ki] = temp1;
-            B[i + 2][ki] = temp2;
-            B[i + 3][ki] = temp3;
-            B[i + 4][ki] = temp4;
-            B[i + 5][ki] = temp5;
-            B[i + 6][ki] = temp6;
-            B[i + 7][ki] = temp7;
+            copy_row(A[i + j], i, B[i + 7 - j], i, 8);
         }
+
+        // then reverse again
+        for (j = 0; j < 4; ++j)
+        {
+            swap_row(B[i + j], i, B[i + 7 - j], i, 8);
+        }
+
+        internal_transpose(i, i, 8, M, N, B);
     }
 }
 
@@ -86,17 +128,17 @@ char transpose_64x64_desc[] = "Transpose with blocking n = 4";
 void transpose_64x64(int M, int N, int A[N][M], int B[M][N])
 {
     int n = 4;
-    int i, j, ki, kj;
+    int i, j, k, l;
 
     for (i = 0; i < N; i += n)
     {
         for (j = 0; j < M; j += n)
         {
-            for (ki = i; ki < i + n; ++ki)
+            for (k = i; k < i + n; ++k)
             {
-                for (kj = j; kj < j + n; ++kj)
+                for (l = j; l < j + n; ++l)
                 {
-                    B[kj][ki] = A[ki][kj];
+                    B[l][k] = A[k][l];
                 }
             }
         }
@@ -106,25 +148,80 @@ void transpose_64x64(int M, int N, int A[N][M], int B[M][N])
 char transpose_64x64_diagonal_desc[] = "Transpose with blocking n = 4, then special process along the diagonal";
 void transpose_64x64_diagonal(int M, int N, int A[N][M], int B[M][N])
 {
-    int n = 4;
+    int i, j;
 
-    int i = 0;
-    int j = 0;
-    int temp = 0;
-
-    for (i = 0; i < N; i += n)
+    for (i = 0; i < N; i += 8)
     {
-        for (j = 0; j < M; j += n)
+        for (j = 0; j < M; j += 8)
         {
-            for (int ki = i; ki < i + n; ++ki)
+            if (i == j)
             {
-                for (int kj = j; kj < j + n; ++kj)
-                {
-                    temp = A[ki][kj];
-                    B[kj][ki] = temp;
-                }
+                continue;
             }
+
+            // split to four 4x4 block(without cache conflict)
+            // up-left
+            external_transpose(i, j, 4, M, N, A, B);
+
+            // up-right
+            external_transpose(i, j + 4, 4, M, N, A, B);
+
+            // down-right
+            external_transpose(i + 4, j + 4, 4, M, N, A, B);
+
+            // down-left
+            external_transpose(i + 4, j, 4, M, N, A, B);
         }
+    }
+
+    // copy A to B
+    // then split to four 4x4 block then transpose in place
+    // eventually swap up-right and down-left blocks
+    for (i = 0; i < N; i += 8)
+    {
+        // copy from A to B but shift one row(prevent cache jiltering)
+        for (j = 0; j < 4; ++j)
+        {
+            copy_row(A[i + ((j + 1) & 0x3)], i, B[i + j], i, 8);
+        }
+
+        // bubble last row
+        for (j = 3; j > 0; --j)
+        {
+            swap_row(B[i + j], i, B[i + j - 1], i, 8);
+        }
+
+        // up-left
+        internal_transpose(i, i, 4, M, N, B);
+
+        // up-right
+        internal_transpose(i, i + 4, 4, M, N, B);
+        swap_row(B[i], i + 4, B[i + 3], i + 4, 4);
+        swap_row(B[i + 1], i + 4, B[i + 2], i + 4, 4);
+
+        for (j = 0; j < 4; ++j)
+        {
+            copy_row(A[i + 4 + ((j + 1) & 0x3)], i, B[i + 4 + j], i, 8);
+        }
+
+        for (j = 3; j > 0; --j)
+        {
+            swap_row(B[i + 4 + j], i, B[i + 4 + j - 1], i, 8);
+        }
+
+        // down-left
+        internal_transpose(i + 4, i, 4, M, N, B);
+        swap_row(B[i + 4], i, B[i + 7], i, 4);
+        swap_row(B[i + 5], i, B[i + 6], i, 4);
+
+        // down-right
+        internal_transpose(i + 4, i + 4, 4, M, N, B);
+
+        // swap up-right block and down-left block
+        swap_row(B[i], i + 4, B[i + 7], i, 4);
+        swap_row(B[i + 1], i + 4, B[i + 6], i, 4);
+        swap_row(B[i + 2], i + 4, B[i + 5], i, 4);
+        swap_row(B[i + 3], i + 4, B[i + 4], i, 4);
     }
 }
 
@@ -157,7 +254,7 @@ void transpose_submit(int M, int N, int A[N][M], int B[M][N])
 
     if (M == 61 && N == 67)
     {
-        transpose_32x32(M, N, A, B);
+        trans(M, N, A, B);
         return;
     }
 
@@ -200,7 +297,7 @@ void registerFunctions()
     registerTransFunction(transpose_submit, transpose_submit_desc);
 
     /* Register any additional transpose functions */
-    registerTransFunction(trans, trans_desc);
+    // registerTransFunction(trans, trans_desc);
 
     registerTransFunction(transpose_64x64_diagonal, transpose_64x64_diagonal_desc);
 }
