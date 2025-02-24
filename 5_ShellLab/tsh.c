@@ -223,6 +223,7 @@ void eval(char *cmdline)
     }
 
     /* block sigchild */
+    /* should block other signal? other signal do read only */
     sigset_t new_set, old_set;
     Sigemptyset(&new_set);
     Sigaddset(&new_set, SIGCHLD);
@@ -346,7 +347,64 @@ int builtin_cmd(char **argv)
  */
 void do_bgfg(char **argv)
 {
-    return;
+    if (argv[1] == NULL)
+    {
+        return;
+    }
+
+    /* block sigchild */
+    /* should block other signal? other signal do read only */
+    sigset_t new_set, old_set;
+    Sigemptyset(&new_set);
+    Sigaddset(&new_set, SIGCHLD);
+    Sigprocmask(SIG_BLOCK, &new_set, &old_set);
+
+    struct job_t *job = NULL;
+    pid_t pid = 0;
+
+    if (argv[1][0] == '%')
+    {
+        int jid = atoi(argv[1] + 1);
+        job = getjobjid(jobs, jid);
+        pid = job->pid;
+    }
+    else
+    {
+        pid = atoi(argv[1]);
+        job = getjobpid(jobs, pid);
+    }
+
+    int fg = 0;
+
+    if (job != NULL)
+    {
+        if (strcmp(argv[0], "fg") == 0 && job->state != FG)
+        {
+            fg = 1;
+            job->state = FG;
+            pid_t pgid = Getpgid(job->pid);
+            Kill(-pgid, SIGCONT);
+        }
+
+        if (strcmp(argv[0], "bg") == 0 && job->state != BG)
+        {
+            job->state = BG;
+            pid_t pgid = Getpgid(job->pid);
+            Kill(-pgid, SIGCONT);
+        }
+    }
+    else
+    {
+        fprintf(stderr, "Job %s not exists", argv[1]);
+    }
+
+    /* unblock sigchild */
+    Sigprocmask(SIG_SETMASK, &old_set, NULL);
+
+    if (fg)
+    {
+        waitfg(pid);
+    }
 }
 
 /*
@@ -393,10 +451,6 @@ void sigchld_handler(int sig)
 
         if (WIFEXITED(status)) /* terminated normally */
         {
-            if (WEXITSTATUS(status) != 0) /* abnormal return status */
-            {
-            }
-
             deletejob(jobs, pid);
         }
         else if (WIFSIGNALED(status)) /* terminated by signal */
@@ -411,6 +465,9 @@ void sigchld_handler(int sig)
         }
         else if (WIFCONTINUED(status)) /* continued */
         {
+            fprintf(stderr, "[%d] (%d) %s", jobp->jid, jobp->pid, jobp->cmdline);
+            /* default bg job, fg job could only be updated when send signal(fg cmd) */
+            jobp->state = jobp->state == ST ? BG : jobp->state;
         }
     }
 
