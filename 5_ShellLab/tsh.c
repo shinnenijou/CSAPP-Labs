@@ -353,7 +353,7 @@ void do_bgfg(char **argv)
 {
     if (argv[1] == NULL)
     {
-        fprintf(stderr, "%s: command requires PID or %%jobid argument\n", argv[0]);
+        fprintf(stderr, "%s command requires PID or %%jobid argument\n", argv[0]);
         return;
     }
 
