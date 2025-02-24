@@ -41,6 +41,8 @@ char prompt[] = "tsh> "; /* command line prompt (DO NOT CHANGE) */
 int verbose = 0;         /* if true, print additional output */
 int nextjid = 1;         /* next job ID to allocate */
 char sbuf[MAXLINE];      /* for composing sprintf messages */
+sigset_t sigchld_mask;   /* reused sigchld mask*/
+sigset_t sigfull_mask;   /* resued full signal mask*/
 
 struct job_t
 {                          /* The job struct */
@@ -137,6 +139,11 @@ int main(int argc, char **argv)
         }
     }
 
+    /* initialize reused mask */
+    Sigemptyset(&sigchld_mask);
+    Sigaddset(&sigchld_mask, SIGCHLD);
+    Sigfillset(&sigfull_mask);
+
     /* Install the signal handlers */
 
     /* These are the ones you will need to implement */
@@ -215,19 +222,16 @@ void eval(char *cmdline)
         return;
     }
 
-    pid_t pid;
+    /* block sigchild */
+    /* should block other signal? other signal do read only */
+    Sigprocmask(SIG_BLOCK, &sigchld_mask, NULL);
+
+    pid_t pid = 0;
 
     if ((pid = Fork()) == 0)
     { /* child process. will never return */
         Execve(argv[0], argv, environ);
     }
-
-    /* block sigchild */
-    /* should block other signal? other signal do read only */
-    sigset_t new_set, old_set;
-    Sigemptyset(&new_set);
-    Sigaddset(&new_set, SIGCHLD);
-    Sigprocmask(SIG_BLOCK, &new_set, &old_set);
 
     Setpgid(pid, pid);
     addjob(jobs, pid, bg ? BG : FG, cmdline);
@@ -239,7 +243,7 @@ void eval(char *cmdline)
     }
 
     /* unblock sigchild */
-    Sigprocmask(SIG_SETMASK, &old_set, NULL);
+    Sigprocmask(SIG_UNBLOCK, &sigchld_mask, NULL);
 
     if (!bg)
     {
@@ -349,28 +353,40 @@ void do_bgfg(char **argv)
 {
     if (argv[1] == NULL)
     {
+        fprintf(stderr, "%s: command requires PID or %%jobid argument\n", argv[0]);
+        return;
+    }
+
+    int jid = 0;
+    pid_t pid = 0;
+
+    if (argv[1][0] == '%')
+    {
+        jid = atoi(argv[1] + 1);
+    }
+    else
+    {
+        pid = atoi(argv[1]);
+    }
+
+    if (jid == 0 && pid == 0)
+    {
+        fprintf(stderr, "%s: argument must be a PID or %%jobid\n", argv[0]);
         return;
     }
 
     /* block sigchild */
     /* should block other signal? other signal do read only */
-    sigset_t new_set, old_set;
-    Sigemptyset(&new_set);
-    Sigaddset(&new_set, SIGCHLD);
-    Sigprocmask(SIG_BLOCK, &new_set, &old_set);
+    Sigprocmask(SIG_BLOCK, &sigchld_mask, NULL);
 
     struct job_t *job = NULL;
-    pid_t pid = 0;
 
-    if (argv[1][0] == '%')
+    if (jid > 0)
     {
-        int jid = atoi(argv[1] + 1);
         job = getjobjid(jobs, jid);
-        pid = job->pid;
     }
     else
     {
-        pid = atoi(argv[1]);
         job = getjobpid(jobs, pid);
     }
 
@@ -378,6 +394,8 @@ void do_bgfg(char **argv)
 
     if (job != NULL)
     {
+        pid = job->pid;
+
         if (strcmp(argv[0], "fg") == 0 && job->state != FG)
         {
             fg = 1;
@@ -393,13 +411,17 @@ void do_bgfg(char **argv)
             Kill(-pgid, SIGCONT);
         }
     }
-    else
+    else if (jid > 0)
     {
-        fprintf(stderr, "Job %s not exists", argv[1]);
+        fprintf(stderr, "%s: No such job\n", argv[1]);
+    }
+    else if (pid > 0)
+    {
+        fprintf(stderr, "(%s): No such process\n", argv[1]);
     }
 
     /* unblock sigchild */
-    Sigprocmask(SIG_SETMASK, &old_set, NULL);
+    Sigprocmask(SIG_UNBLOCK, &sigchld_mask, NULL);
 
     if (fg)
     {
@@ -433,9 +455,8 @@ void waitfg(pid_t pid)
  */
 void sigchld_handler(int sig)
 {
-    sigset_t new_set, old_set;
-    Sigfillset(&new_set);
-    Sigprocmask(SIG_BLOCK, &new_set, &old_set);
+    sigset_t old_set;
+    Sigprocmask(SIG_BLOCK, &sigfull_mask, &old_set);
 
     pid_t pid;
     int status;
@@ -465,9 +486,13 @@ void sigchld_handler(int sig)
         }
         else if (WIFCONTINUED(status)) /* continued */
         {
-            fprintf(stderr, "[%d] (%d) %s", jobp->jid, jobp->pid, jobp->cmdline);
             /* default bg job, fg job could only be updated when send signal(fg cmd) */
             jobp->state = jobp->state == ST ? BG : jobp->state;
+
+            if (jobp->state == BG)
+            {
+                fprintf(stderr, "[%d] (%d) %s", jobp->jid, jobp->pid, jobp->cmdline);
+            }
         }
     }
 
@@ -481,9 +506,8 @@ void sigchld_handler(int sig)
  */
 void sigint_handler(int sig)
 {
-    sigset_t new_set, old_set;
-    Sigfillset(&new_set);
-    Sigprocmask(SIG_BLOCK, &new_set, &old_set);
+    sigset_t old_set;
+    Sigprocmask(SIG_BLOCK, &sigfull_mask, &old_set);
 
     pid_t pid = fgpid(jobs);
 
@@ -503,9 +527,8 @@ void sigint_handler(int sig)
  */
 void sigtstp_handler(int sig)
 {
-    sigset_t new_set, old_set;
-    Sigfillset(&new_set);
-    Sigprocmask(SIG_BLOCK, &new_set, &old_set);
+    sigset_t old_set;
+    Sigprocmask(SIG_BLOCK, &sigfull_mask, &old_set);
 
     pid_t pid = fgpid(jobs);
 
@@ -787,7 +810,8 @@ int Execve(const char *filename, char *const argv[], char *const envp[])
 {
     if (execve(filename, argv, envp) < 0)
     {
-        unix_error("execve error");
+        fprintf(stderr, "%s: Command not found\n", filename);
+        exit(1);
     }
 
     return 0;
