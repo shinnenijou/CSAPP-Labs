@@ -52,123 +52,159 @@ team_t team = {
 // use least significant bit as current block allocated mark
 static const size_t CUR_ALLOC_MASK = 0x1;
 
-// use second significant bit as previous block allocated mark
+// use second significant bit as predecessor block allocated mark
 static const size_t PREV_ALLOC_MASK = 0x2;
 
-// third bit is not used
 static const size_t MARKS_MASK = ALIGNMENT - 1;
 static const size_t SIZE_MASK = ~MARKS_MASK;
 
 // pointer manipulation helper
+
 #define HEADER(block) *(size_t *)(block)
-#define PREV_FOOTER(block) *(size_t *)((char *)(block) - SIZE_T_SIZE)
-#define FORWARD(ptr, bytes) (void *)((char *)(ptr) + (bytes))
-#define BACKWARD(ptr, bytes) (void *)((char *)(ptr) - (bytes))
+#define PRE_FOOTER(block) *(size_t *)((char *)(block) - SIZE_T_SIZE)
+#define FORWARD(ptr, distance) (void *)((char *)(ptr) + (distance))
+#define BACKWARD(ptr, distance) (void *)((char *)(ptr) - (distance))
+
+// list implementation independent helper functions
+
+static int is_free(void *block);
+static int is_pre_free(void *block);
+static void set_free(void *block);
+static void set_alloc(void *block);
+static void set_pre_free(void *block);
+static void set_pre_alloc(void *block);
+static size_t get_size(void *block);
+static size_t get_pre_size(void *block);
+static void set_size(void *block, size_t size);
+static void *block_to_payload(void *block);
+static void *payload_to_block(void *p);
+static void copy_to_footer(void *block);
+static void *successor(void *block);
+static void *predecessor(void *block);
 
 /*
- *  Allocated bit operation
+ *  is_free - if this block is free then could be allocated to user
  */
-static int IS_ALLOCATED(void *p)
+static int is_free(void *block)
 {
-    return (HEADER(p) & CUR_ALLOC_MASK) != 0;
+    return (HEADER(block) & CUR_ALLOC_MASK) == 0;
 }
 
 /*
- *  Allocated bit operation
+ * is_pre_free - if the predecessor block of this block is free
+ *      every block record predecessor block's allocated status thus call to this function
+ *      will not access the predecessor
  */
-static int IS_PREV_ALLOCATED(void *p)
+static int is_pre_free(void *block)
 {
-    return (HEADER(p) & PREV_ALLOC_MASK) != 0;
+    return (HEADER(block) & PREV_ALLOC_MASK) == 0;
 }
 
 /*
- *  Allocated bit operation
+ *  set_free - mark a block as free block
  */
-static void SET_FREE(void *p)
+static void set_free(void *block)
 {
-    HEADER(p) &= ~CUR_ALLOC_MASK;
+    HEADER(block) &= ~CUR_ALLOC_MASK;
 }
 
 /*
- *  Allocated bit operation
+ *  set_alloc - mark a block as allocated block
  */
-static void SET_ALLOC(void *p)
+static void set_alloc(void *block)
 {
-    HEADER(p) |= CUR_ALLOC_MASK;
+    HEADER(block) |= CUR_ALLOC_MASK;
 }
 
 /*
- *  Allocated bit operation
+ *  set_pre_free - mark a block as its predecessor block is free block
  */
-static void SET_PREV_FREE(void *p)
+static void set_pre_free(void *block)
 {
-    HEADER(p) &= ~PREV_ALLOC_MASK;
+    HEADER(block) &= ~PREV_ALLOC_MASK;
 }
 
 /*
- *  Allocated bit operation
+ *  set_pre_alloc - mark a block as its predecessor block is allocated block
  */
-static void SET_PREV_ALLOC(void *p)
+static void set_pre_alloc(void *block)
 {
-    HEADER(p) |= PREV_ALLOC_MASK;
+    HEADER(block) |= PREV_ALLOC_MASK;
 }
 
 /*
- * block size operation
+ * get_size - get current block size. block size consists of user's payload
+ *      and overhead(e.g., HEADER)
  */
-static size_t GET_SIZE(void *p)
+static size_t get_size(void *block)
 {
-    return HEADER(p) & SIZE_MASK;
+    return HEADER(block) & SIZE_MASK;
 }
 
 /*
- * block size operation. valid iff previous block is free
+ * get_pre_size - get size of predecessor block. the call is valid iff the predecessor
+ *      block is free
  */
-static size_t GET_PREV_SIZE(void *p)
+static size_t get_pre_size(void *block)
 {
-    return PREV_FOOTER(p) & SIZE_MASK;
+    return PRE_FOOTER(block) & SIZE_MASK;
 }
 
-static void SET_SIZE(void *p, size_t size)
+/*
+ * set_size - set current block size. block size consists of user's payload
+ *      and overhead(e.g., HEADER)
+ */
+static void set_size(void *block, size_t size)
 {
-    size_t header = HEADER(p);
+    size_t header = HEADER(block);
     header &= MARKS_MASK;
     header |= size;
-    HEADER(p) = header;
+    HEADER(block) = header;
 }
 
 /*
- * list operation
+ * copy_to_footer - copy header to footer. useful when coalesce
  */
-static void *NEXT_BLOCK(void *p)
+static void copy_to_footer(void *block)
 {
-    return FORWARD(p, GET_SIZE(p));
+    PRE_FOOTER(successor(block)) = HEADER(block);
 }
 
 /*
- * list operation. valid iff previous block is free
+ * block_to_payload - get payload part of the block. typically used when return
+ *      pointer to user
  */
-static void *PREV_BLOCK(void *p)
+static void *block_to_payload(void *block)
 {
-    return BACKWARD(p, GET_PREV_SIZE(p));
+    return FORWARD(block, HEADER_SIZE);
 }
 
 /*
- * copy header to copy when free a block
+ * payload_to_block - get corresponding block pointer from a payload pointer.
+ *      typically used when free a block by user
  */
-static void COPY_TO_FOOTER(void *p)
-{
-    PREV_FOOTER(NEXT_BLOCK(p)) = HEADER(p);
-}
-
-static void *GET_PAYLOAD(void *p)
-{
-    return FORWARD(p, HEADER_SIZE);
-}
-
-static void *PAYLOAD_TO_BLOCK(void *p)
+static void *payload_to_block(void *p)
 {
     return BACKWARD(p, HEADER_SIZE);
+}
+
+/*
+ * successor - successor block to current block(i.e., next block in physical
+ * memory space).This should be distinct with logic 'next' block in list.
+ */
+static void *successor(void *block)
+{
+    return FORWARD(block, get_size(block));
+}
+
+/*
+ * predecessor - successor block to current block(i.e., next block in physical
+ * memory space).This should be distinct with logic 'previous' block in list.
+ * ths call to this function is valid iff predecessor block is free
+ */
+static void *predecessor(void *block)
+{
+    return BACKWARD(block, get_pre_size(block));
 }
 
 /*********************************************************
@@ -194,22 +230,22 @@ static void print_list()
 {
     int i = 0;
     fprintf(stdout, "======================\n");
-    for (void *block = HEAD; block != TAIL; block = NEXT_BLOCK(block))
+    for (void *block = HEAD; block != TAIL; block = successor(block))
     {
-        if (GET_SIZE(block) == 0)
+        if (get_size(block) == 0)
             break;
-        fprintf(stdout, "[%d]free = %d, prev_free = %d, size = %d\n", ++i, !IS_ALLOCATED(block), !IS_PREV_ALLOCATED(block), GET_SIZE(block));
+        fprintf(stdout, "[%d]free = %d, prev_free = %d, size = %d\n", ++i, is_free(block), is_pre_free(block), get_size(block));
     }
     fprintf(stdout, "======================\n");
 }
 
 static void check_consistency()
 {
-    int prev_free = !IS_ALLOCATED(HEAD);
+    int prev_free = is_free(HEAD);
 
-    for (void *block = NEXT_BLOCK(HEAD); block != TAIL; block = NEXT_BLOCK(block))
+    for (void *block = successor(HEAD); block != TAIL; block = successor(block))
     {
-        int free = !IS_ALLOCATED(block);
+        int free = is_free(block);
 
         if (free && free == prev_free)
         {
@@ -224,8 +260,8 @@ static void check_consistency()
 /*
  * increment heap size. always increment one page(typically 4KB)
  * firstly increase TAIL block and set new TAIL
- * then try to coalesce new block and previous block
- * do nothing with HEAD block (unless HEAD is exactly the previous block)
+ * then try to coalesce new block and predecessor block
+ * do nothing with HEAD block (unless HEAD is exactly the predecessor block)
  * return new free block
  */
 static void *mm_increment(size_t size)
@@ -241,13 +277,13 @@ static void *mm_increment(size_t size)
     mm_set_block_free(new_block, size);
 
     // set new tail block
-    TAIL = NEXT_BLOCK(new_block);
+    TAIL = successor(new_block);
     mm_set_block_alloc(TAIL, HEADER_SIZE);
 
-    // try to coalesce with previous block
-    if (!IS_PREV_ALLOCATED(new_block))
+    // try to coalesce with predecessor block
+    if (is_pre_free(new_block))
     {
-        new_block = mm_coalesce(PREV_BLOCK(new_block), new_block);
+        new_block = mm_coalesce(predecessor(new_block), new_block);
     }
 
     return new_block;
@@ -259,39 +295,39 @@ static void *mm_increment(size_t size)
  */
 static void *mm_coalesce(void *first_block, void *second_block)
 {
-    SET_SIZE(first_block, GET_SIZE(first_block) + GET_SIZE(second_block));
-    COPY_TO_FOOTER(first_block);
+    set_size(first_block, get_size(first_block) + get_size(second_block));
+    copy_to_footer(first_block);
     return first_block;
 }
 
 static void mm_set_block_free(void *block, size_t size)
 {
-    SET_SIZE(block, size);
-    SET_FREE(block);
-    COPY_TO_FOOTER(block);
-    SET_PREV_FREE(NEXT_BLOCK(block));
+    set_size(block, size);
+    set_free(block);
+    copy_to_footer(block);
+    set_pre_free(successor(block));
 }
 
 static void mm_set_block_alloc(void *block, size_t size)
 {
-    SET_SIZE(block, size);
-    SET_ALLOC(block);
-    SET_PREV_ALLOC(NEXT_BLOCK(block));
+    set_size(block, size);
+    set_alloc(block);
+    set_pre_alloc(successor(block));
 }
 
 /*
- * search through list to find a first fit block
+ * mm_search_block - search list from begin to end to find a fit block
  */
 static void *mm_search_block(void *begin, size_t need_size)
 {
-    for (void *block = begin; block != TAIL; block = NEXT_BLOCK(block))
+    for (void *block = begin; block != TAIL; block = successor(block))
     {
-        if (IS_ALLOCATED(block))
+        if (!is_free(block))
         {
             continue;
         }
 
-        size_t block_size = GET_SIZE(block);
+        size_t block_size = get_size(block);
 
         if (block_size < need_size)
         {
@@ -323,7 +359,7 @@ int mm_init(void)
     TAIL = (void *)ALIGN((size_t)p);
 
     // init tail block
-    SET_PREV_ALLOC(TAIL);
+    set_pre_alloc(TAIL);
     mm_set_block_alloc(TAIL, HEADER_SIZE);
 
     // increment heap then HEAD become a free block and a new tail will be set
@@ -367,13 +403,13 @@ void *mm_malloc(size_t size)
         }
     }
 
-    size_t candidate_size = GET_SIZE(candidate_block);
+    size_t candidate_size = get_size(candidate_block);
 
     // try to split remaining block. note every block is at least 2 * 8 bytes
     if (candidate_size - need_size >= HEADER_SIZE + ALIGNMENT)
     {
         mm_set_block_alloc(candidate_block, need_size);
-        mm_set_block_free(NEXT_BLOCK(candidate_block), candidate_size - need_size);
+        mm_set_block_free(successor(candidate_block), candidate_size - need_size);
     }
     else
     {
@@ -381,31 +417,30 @@ void *mm_malloc(size_t size)
     }
 
     check_consistency();
-    return GET_PAYLOAD(candidate_block);
+    return block_to_payload(candidate_block);
 }
 
 /*
  * mm_free - Freeing a block does nothing.
- * when free a block, the next block and previous block should always be free
  * except HEAD and TAIL
  */
 void mm_free(void *ptr)
 {
-    void *block = PAYLOAD_TO_BLOCK(ptr);
-    mm_set_block_free(block, GET_SIZE(block));
+    void *block = payload_to_block(ptr);
+    mm_set_block_free(block, get_size(block));
 
     // coalesce with next block
-    void *next_block = NEXT_BLOCK(block);
+    void *next_block = successor(block);
 
-    if (next_block != TAIL && !IS_ALLOCATED(next_block))
+    if (next_block != TAIL && is_free(next_block))
     {
         mm_coalesce(block, next_block);
     }
 
-    // try to coalesce with previous block
-    if (!IS_PREV_ALLOCATED(block))
+    // try to coalesce with predecessor block
+    if (is_pre_free(block))
     {
-        void *prev_block = PREV_BLOCK(block);
+        void *prev_block = predecessor(block);
         mm_coalesce(prev_block, block);
     }
 
