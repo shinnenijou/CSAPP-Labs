@@ -81,6 +81,8 @@ static void *payload_to_block(void *p);
 static void copy_to_footer(void *block);
 static void *successor(void *block);
 static void *predecessor(void *block);
+static void *create_block(size_t size);
+static void *coalesce_blocks(void *first_block, void *second_block);
 
 /*
  *  is_free - if this block is free then could be allocated to user
@@ -208,20 +210,25 @@ static void *predecessor(void *block)
 }
 
 /*********************************************************
- * Implicit list helper function
+ * free list operation functions
  ********************************************************/
 
-static void *mm_increment(size_t size);
-static void *mm_coalesce(void *first_block, void *second_block);
-static void mm_set_block_free(void *block, size_t size);
-static void mm_set_block_alloc(void *block, size_t size);
-static void *mm_search_block(void *begin, size_t need_size);
+static void *search_block(void *begin, void *end, size_t need_size);
 
 /*
- * List head
+ * Head block, valid for allocating
  */
 static void *HEAD = NULL;
+
+/*
+ * Tail block for internal usage.
+ * Useful when coalescing last blocks or traversing blocks
+ * Unlike maintaining the last 'valid' block, it is much more easy to maintain
+ *      such tail block since tail block will only change when increasing heap size
+ * This tail block does not depend on list implementation
+ */
 static void *TAIL = NULL;
+
 /*********************************************************
  * DEBUG
  ********************************************************/
@@ -258,33 +265,30 @@ static void check_consistency()
 }
 
 /*
- * increment heap size. always increment one page(typically 4KB)
- * firstly increase TAIL block and set new TAIL
- * then try to coalesce new block and predecessor block
- * do nothing with HEAD block (unless HEAD is exactly the predecessor block)
- * return new free block
+ * create_block - create a new free block by increasing heap size
+ * return the address of new block
+ * TAIL block will be updated here(thus, not thread-safe)
  */
-static void *mm_increment(size_t size)
+static void *create_block(size_t size)
 {
-    if (mem_sbrk(size) == (void *)-1)
+    void *new_block = mem_sbrk(size);
+
+    if (new_block == (void *)-1)
     {
         return NULL;
     }
 
-    void *new_block = TAIL;
-
-    // set old tail as a new free block
-    mm_set_block_free(new_block, size);
+    // init new block
+    // trick: old TAIL block recorded allocating status of its predecessor (i.e., the last block) so keep it here
+    set_size(new_block, size);
+    set_free(new_block);
+    copy_to_footer(new_block);
 
     // set new tail block
     TAIL = successor(new_block);
-    mm_set_block_alloc(TAIL, HEADER_SIZE);
-
-    // try to coalesce with predecessor block
-    if (is_pre_free(new_block))
-    {
-        new_block = mm_coalesce(predecessor(new_block), new_block);
-    }
+    set_alloc(TAIL);
+    set_pre_free(TAIL);
+    set_size(TAIL, HEADER_SIZE);
 
     return new_block;
 }
@@ -293,34 +297,19 @@ static void *mm_increment(size_t size)
  * mm_coalesce - coalesce two contiguous free block
  * return new free block
  */
-static void *mm_coalesce(void *first_block, void *second_block)
+static void *coalesce_blocks(void *first_block, void *second_block)
 {
     set_size(first_block, get_size(first_block) + get_size(second_block));
     copy_to_footer(first_block);
     return first_block;
 }
 
-static void mm_set_block_free(void *block, size_t size)
-{
-    set_size(block, size);
-    set_free(block);
-    copy_to_footer(block);
-    set_pre_free(successor(block));
-}
-
-static void mm_set_block_alloc(void *block, size_t size)
-{
-    set_size(block, size);
-    set_alloc(block);
-    set_pre_alloc(successor(block));
-}
-
 /*
- * mm_search_block - search list from begin to end to find a fit block
+ * search_block - search list from begin to end to find a fit block
  */
-static void *mm_search_block(void *begin, size_t need_size)
+static void *search_block(void *begin, void *end, size_t need_size)
 {
-    for (void *block = begin; block != TAIL; block = successor(block))
+    for (void *block = begin; block != end; block = successor(block))
     {
         if (!is_free(block))
         {
@@ -359,11 +348,13 @@ int mm_init(void)
     TAIL = (void *)ALIGN((size_t)p);
 
     // init tail block
+    set_size(TAIL, HEADER_SIZE);
     set_pre_alloc(TAIL);
-    mm_set_block_alloc(TAIL, HEADER_SIZE);
+    set_alloc(TAIL);
 
     // increment heap then HEAD become a free block and a new tail will be set
-    HEAD = mm_increment(mem_pagesize());
+    HEAD = create_block(mem_pagesize());
+    set_pre_alloc(HEAD);
 
     if (HEAD == NULL)
     {
@@ -382,7 +373,7 @@ int mm_init(void)
 void *mm_malloc(size_t size)
 {
     size_t need_size = ALIGN(size) + HEADER_SIZE;
-    void *candidate_block = mm_search_block(HEAD, need_size);
+    void *candidate_block = search_block(HEAD, TAIL, need_size);
 
     // if no fit block then increment heap space and try again
     if (!candidate_block)
@@ -395,7 +386,7 @@ void *mm_malloc(size_t size)
             incr += page_size;
         }
 
-        candidate_block = mm_increment(incr);
+        candidate_block = create_block(incr);
 
         if (!candidate_block)
         {
@@ -405,15 +396,23 @@ void *mm_malloc(size_t size)
 
     size_t candidate_size = get_size(candidate_block);
 
-    // try to split remaining block. note every block is at least 2 * 8 bytes
+    // try to split remaining block. every block is at least 2 * 8 bytes
     if (candidate_size - need_size >= HEADER_SIZE + ALIGNMENT)
     {
-        mm_set_block_alloc(candidate_block, need_size);
-        mm_set_block_free(successor(candidate_block), candidate_size - need_size);
+        set_size(candidate_block, need_size);
+        set_alloc(candidate_block);
+
+        // split block
+        void *new_block = successor(candidate_block);
+        set_size(new_block, candidate_size - need_size);
+        set_free(new_block);
+        set_pre_alloc(new_block);
+        copy_to_footer(new_block);
     }
     else
     {
-        mm_set_block_alloc(candidate_block, candidate_size);
+        set_alloc(candidate_block);
+        set_pre_alloc(successor(candidate_block));
     }
 
     check_consistency();
@@ -427,21 +426,23 @@ void *mm_malloc(size_t size)
 void mm_free(void *ptr)
 {
     void *block = payload_to_block(ptr);
-    mm_set_block_free(block, get_size(block));
+    set_free(block);
+    copy_to_footer(block);
+    set_pre_free(successor(block));
 
     // coalesce with next block
     void *next_block = successor(block);
 
     if (next_block != TAIL && is_free(next_block))
     {
-        mm_coalesce(block, next_block);
+        coalesce_blocks(block, next_block);
     }
 
     // try to coalesce with predecessor block
     if (is_pre_free(block))
     {
         void *prev_block = predecessor(block);
-        mm_coalesce(prev_block, block);
+        coalesce_blocks(prev_block, block);
     }
 
     check_consistency();
