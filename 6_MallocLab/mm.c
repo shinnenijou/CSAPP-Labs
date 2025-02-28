@@ -354,12 +354,13 @@ int mm_init(void)
 
     // increment heap then HEAD become a free block and a new tail will be set
     HEAD = create_block(mem_pagesize());
-    set_pre_alloc(HEAD);
 
     if (HEAD == NULL)
     {
         return -1;
     }
+
+    set_pre_alloc(HEAD);
 
     return 0;
 }
