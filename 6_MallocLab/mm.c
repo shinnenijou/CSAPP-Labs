@@ -669,7 +669,7 @@ void mm_free(void *bp)
 
     /* keep previous block's allocated status and set current to free*/
     PUT(hp, PACK(size, GET_PRE_ALLOC(hp)));
-    PUT(FOOTER_PTR(bp), PACK(size, GET_PRE_ALLOC(hp)));
+    PUT(FOOTER_PTR(bp), GET(hp));
 
     /* set next block's previous block status to free*/
     void *next_hp = HEADER_PTR(NEXT_BLOCK(bp));
@@ -683,17 +683,67 @@ void mm_free(void *bp)
  */
 void *mm_realloc(void *ptr, size_t size)
 {
-    void *oldptr = ptr;
-    void *newptr;
-    size_t copySize;
+    void *old_ptr = ptr;
+    size_t old_size = GET_SIZE(HEADER_PTR(old_ptr));
 
-    newptr = mm_malloc(size);
-    if (newptr == NULL)
-        return NULL;
-    copySize = *(size_t *)((char *)oldptr - HEADER_SIZE);
-    if (size < copySize)
-        copySize = size;
-    memcpy(newptr, oldptr, copySize);
-    mm_free(oldptr);
-    return newptr;
+    size_t new_size = ALIGN(size) + HEADER_SIZE;
+    new_size = MAX(new_size, MIN_BLOCK_SIZE);
+
+    if (new_size == old_size)
+    {
+        return old_ptr;
+    }
+
+    /* next block is free but space still not enough. free current block then malloc a new*/
+    if ((old_size < new_size) && (GET_ALLOC(HEADER_PTR(NEXT_BLOCK(old_ptr))) || (GET_SIZE(HEADER_PTR(NEXT_BLOCK(old_ptr))) + old_size < new_size)))
+    {
+        void *new_ptr = mm_malloc(new_size);
+
+        if (new_ptr == NULL)
+        {
+            return NULL;
+        }
+
+        memcpy(new_ptr, old_ptr, MIN(new_size - HEADER_SIZE, old_size - HEADER_SIZE));
+        mm_free(old_ptr);
+        return new_ptr;
+    }
+
+    /*
+     * try to coalesc with next block.
+     * a safe and easy way is to store some user data in the stack then coalesce
+     * then recover data after spliting
+     */
+    size_t old_next = GET(HEADER_PTR(old_ptr) + NEXT_FREE_OFFSET);
+    size_t old_prev = GET(HEADER_PTR(old_ptr) + PREV_FREE_OFFSET);
+    size_t old_footer = GET(FOOTER_PTR(old_ptr));
+    void *old_fp = FOOTER_PTR(old_ptr);
+
+    /* keep previous block's allocated status and set current to free*/
+    PUT(HEADER_PTR(old_ptr), PACK(old_size, GET_PRE_ALLOC(HEADER_PTR(old_ptr))));
+    PUT(FOOTER_PTR(old_ptr), GET(HEADER_PTR(old_ptr)));
+
+    /* set next block's previous block status to free*/
+    PUT(HEADER_PTR(NEXT_BLOCK(old_ptr)), PACK(GET_SIZE(HEADER_PTR(NEXT_BLOCK(old_ptr))), GET_ALLOC(HEADER_PTR(NEXT_BLOCK(old_ptr)))));
+
+    /* try to coalesce with next block */
+    if (!GET_ALLOC(HEADER_PTR(NEXT_BLOCK(old_ptr))))
+    {
+        remove_free_node(NEXT_BLOCK(old_ptr));
+        PUT(HEADER_PTR(old_ptr), PACK(old_size + GET_SIZE(HEADER_PTR(NEXT_BLOCK(old_ptr))), GET_PRE_ALLOC(HEADER_PTR(old_ptr))));
+        PUT(FOOTER_PTR(old_ptr), GET(HEADER_PTR(old_ptr)));
+    }
+
+    insert_free_node(old_ptr);
+    old_ptr = place(old_ptr, new_size);
+
+    PUT(HEADER_PTR(old_ptr) + NEXT_FREE_OFFSET, old_next);
+    PUT(HEADER_PTR(old_ptr) + PREV_FREE_OFFSET, old_prev);
+
+    if (new_size > old_size)
+    {
+        PUT(old_fp, old_footer);
+    }
+
+    return old_ptr;
 }
