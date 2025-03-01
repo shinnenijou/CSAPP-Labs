@@ -282,21 +282,21 @@ static void *place(void *bp, size_t size)
 {
     size_t old_size = GET_SIZE(HEADER_PTR(bp));
 
-    remove_free_node(bp);
-
     if (old_size > size + MIN_BLOCK_SIZE)
     {
         void *header = HEADER_PTR(bp);
-        PUT(header, PACK(size, GET_PRE_ALLOC(header) | CUR_ALLOC));
+        PUT(header, PACK(old_size - size, GET_PRE_ALLOC(header)));
+        PUT(FOOTER_PTR(bp), PACK(old_size - size, GET_PRE_ALLOC(header)));
 
         /* split block */
-        void *next_bp = NEXT_BLOCK(bp);
-        PUT(HEADER_PTR(next_bp), PACK(old_size - size, PREV_ALLOC));
-        PUT(FOOTER_PTR(next_bp), PACK(old_size - size, PREV_ALLOC));
-        insert_free_node(next_bp);
+        bp = NEXT_BLOCK(bp);
+        PUT(HEADER_PTR(bp), PACK(size, CUR_ALLOC));
+        void *next_header = HEADER_PTR(NEXT_BLOCK(bp));
+        PUT(next_header, PACK(GET_SIZE(next_header), PREV_ALLOC | GET_ALLOC(next_header)));
     }
     else
     {
+        remove_free_node(bp);
         void *header = HEADER_PTR(bp);
         void *next_header = HEADER_PTR(NEXT_BLOCK(bp));
         PUT(header, PACK(old_size, GET_PRE_ALLOC(header) | CUR_ALLOC));
