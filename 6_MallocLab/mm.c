@@ -67,7 +67,7 @@ team_t team = {
 /* indidate previous block have been allocated to user */
 #define PREV_ALLOC 0x2
 
-#define MARKS_MASK 0x7
+#define MARKS_MASK (ALIGNMENT - 1)
 
 #define MAX(x, y) ((x) > (y) ? (x) : (y))
 
@@ -76,7 +76,7 @@ team_t team = {
 
 /* Read and write a word */
 #define GET(p) (*(size_t *)(p))
-#define PUT(p, val) (*(size_t *)(p) = (val))
+#define PUT(p, val) (*(size_t *)(p) = (size_t)(val))
 
 /* Read the size and alloc marks from address p */
 #define GET_SIZE(p) (GET(p) & ~MARKS_MASK)
@@ -92,27 +92,115 @@ team_t team = {
 #define PREV_BLOCK(bp) ((char *)(bp) - GET_SIZE(HEADER_PTR(bp) - WSIZE))
 
 /*********************************************************
- * free list operation functions
+ * FREE LIST operations
  ********************************************************/
+
+#define NEXT_FREE_OFFSET WSIZE
+#define PREV_FREE_OFFSET (WSIZE + PSIZE)
+#define NEXT_FREE_PTR(bp) ((void *)GET(HEADER_PTR(bp) + NEXT_FREE_OFFSET))
+#define PREV_FREE_PTR(bp) ((void *)GET(HEADER_PTR(bp) + PREV_FREE_OFFSET))
+
+/*
+ * Free list head node. use ring list implementaion here to avoid corner case
+ */
+static void *FREE_LIST = NULL;
+
+static void *init_free_list(void *bp);
+static void remove_free_node(void *bp);
+static void insert_free_node(void *bp);
+static void *search_fit(size_t size);
+
+/*
+ * init_free_list - given a sentinel block init a ring dual linked list
+ */
+static void *init_free_list(void *bp)
+{
+    FREE_LIST = bp;
+    PUT(HEADER_PTR(bp) + NEXT_FREE_OFFSET, bp);
+    PUT(HEADER_PTR(bp) + PREV_FREE_OFFSET, bp);
+    return FREE_LIST;
+}
+
+/*
+ * insert_free_node - insert a block to the first node in free list
+ */
+static void insert_free_node(void *bp)
+{
+    void *old_first = NEXT_FREE_PTR(FREE_LIST);
+
+    /* link prev node and next node to bp */
+    PUT(HEADER_PTR(FREE_LIST) + NEXT_FREE_OFFSET, bp);
+    PUT(HEADER_PTR(old_first) + PREV_FREE_OFFSET, bp);
+
+    /* link bp to prev and next node */
+    PUT(HEADER_PTR(bp) + NEXT_FREE_OFFSET, old_first);
+    PUT(HEADER_PTR(bp) + PREV_FREE_OFFSET, FREE_LIST);
+}
+
+/*
+ * remove_free_node - remove a node from free list
+ */
+static void remove_free_node(void *bp)
+{
+    void *prev = PREV_FREE_PTR(bp);
+    void *next = NEXT_FREE_PTR(bp);
+
+    PUT(HEADER_PTR(prev) + NEXT_FREE_OFFSET, next);
+    PUT(HEADER_PTR(next) + PREV_FREE_OFFSET, prev);
+}
+
+/*
+ * search_fit - Given a request size then search a fit block which size is equal or greater than request size
+ *      use best fit strategy here
+ */
+static void *search_fit(size_t request_size)
+{
+    void *candidate = NULL;
+    size_t candidate_size = ~(size_t)0;
+
+    for (void *bp = NEXT_FREE_PTR(FREE_LIST); bp != FREE_LIST; bp = NEXT_FREE_PTR(bp))
+    {
+        void *header = HEADER_PTR(bp);
+
+        if (GET_ALLOC(header))
+        {
+            continue;
+        }
+
+        size_t size = GET_SIZE(header);
+
+        if (size < request_size)
+        {
+            continue;
+        }
+
+        if (size < candidate_size)
+        {
+            candidate = bp;
+            candidate_size = size;
+        }
+    }
+
+    return candidate;
+}
+
+/*********************************************************
+ * block operation helpers
+ ********************************************************/
+
+/*
+ * Head block, internal used to deal with corner case.
+ * valid for allocating from next block to HEAD
+ */
+static void *HEAD = NULL;
 
 static void *extend_heap(size_t size);
 static void *coalesce(void *bp);
-static void *search_fit(size_t size);
 static void *place(void *bp, size_t size);
-
-/*
- * Head block, valid for allocating
- */
-static void *HEAD = NULL;
 
 /*********************************************************
  * DEBUG
  ********************************************************/
-
-// static void debug_print_macro()
-// {
-//     fprintf(stdout, "MIN_BLOCK_SIZE = %d\n", MIN_BLOCK_SIZE);
-// }
 
 static void debug_print_list()
 {
@@ -128,23 +216,19 @@ static void debug_print_list()
     fprintf(stdout, "======================\n");
 }
 
-// static void debug_check_consistency()
-// {
-//     int prev_free = is_free(HEAD);
-
-//     for (void *block = successor(HEAD); block != TAIL; block = successor(block))
-//     {
-//         int free = is_free(block);
-
-//         if (free && free == prev_free)
-//         {
-//             fprintf(stderr, "contiguous free block\n");
-//             return;
-//         }
-
-//         prev_free = free;
-//     }
-// }
+static void debug_print_free_list()
+{
+    int i = 0;
+    fprintf(stdout, "======================\n");
+    for (void *bp = NEXT_FREE_PTR(FREE_LIST); bp != FREE_LIST; bp = NEXT_FREE_PTR(bp))
+    {
+        size_t alloc = GET_ALLOC(HEADER_PTR(bp));
+        size_t prev_alloc = GET_PRE_ALLOC(HEADER_PTR(bp));
+        size_t size = GET_SIZE(HEADER_PTR(bp));
+        fprintf(stdout, "[%d]free = %d, prev_free = %d, size = %d\n", ++i, !alloc, !prev_alloc, size);
+    }
+    fprintf(stdout, "======================\n");
+}
 
 /*
  * extend_heap - apply for extending heap size to system
@@ -167,9 +251,14 @@ static void *extend_heap(size_t size)
     /* new epilogue block*/
     PUT(HEADER_PTR(NEXT_BLOCK(bp)), PACK(0, CUR_ALLOC));
 
+    /* new block will be inserted to free list when coalescing */
     return coalesce(bp);
 }
 
+/*
+ * coalesce - coalesce given free block with potentially free previous block and next block
+ *      Free list is maintained here
+ */
 static void *coalesce(void *bp)
 {
     size_t prev_alloc = GET_PRE_ALLOC(HEADER_PTR(bp));
@@ -178,17 +267,19 @@ static void *coalesce(void *bp)
 
     if (prev_alloc && next_alloc)
     {
-        return bp;
+        insert_free_node(bp);
     }
-
     else if (prev_alloc && !next_alloc)
     {
+        remove_free_node(NEXT_BLOCK(bp));
         size += GET_SIZE(HEADER_PTR(NEXT_BLOCK(bp)));
         PUT(HEADER_PTR(bp), PACK(size, prev_alloc));
         PUT(FOOTER_PTR(bp), PACK(size, prev_alloc));
+        insert_free_node(bp);
     }
     else if (!prev_alloc && next_alloc)
     {
+        /* prev block is already in free list */
         size += GET_SIZE(HEADER_PTR(PREV_BLOCK(bp)));
         PUT(FOOTER_PTR(bp), PACK(size, GET_PRE_ALLOC(HEADER_PTR(PREV_BLOCK(bp)))));
         PUT(HEADER_PTR(PREV_BLOCK(bp)), PACK(size, GET_PRE_ALLOC(HEADER_PTR(PREV_BLOCK(bp)))));
@@ -196,6 +287,8 @@ static void *coalesce(void *bp)
     }
     else
     {
+        /* prev block is already in free but still need to remove next block */
+        remove_free_node(NEXT_BLOCK(bp));
         size += GET_SIZE(HEADER_PTR(NEXT_BLOCK(bp))) + GET_SIZE(HEADER_PTR(PREV_BLOCK(bp)));
         PUT(HEADER_PTR(PREV_BLOCK(bp)), PACK(size, GET_PRE_ALLOC(HEADER_PTR(PREV_BLOCK(bp)))));
         PUT(FOOTER_PTR(NEXT_BLOCK(bp)), PACK(size, GET_PRE_ALLOC(HEADER_PTR(PREV_BLOCK(bp)))));
@@ -205,30 +298,16 @@ static void *coalesce(void *bp)
     return bp;
 }
 
-static void *search_fit(size_t size)
-{
-    for (void *bp = HEAD; GET_SIZE(HEADER_PTR(bp)) != 0; bp = NEXT_BLOCK(bp))
-    {
-        if (GET_ALLOC(HEADER_PTR(bp)))
-        {
-            continue;
-        }
-
-        if (GET_SIZE(HEADER_PTR(bp)) < size)
-        {
-            continue;
-        }
-
-        /* first hit */
-        return bp;
-    }
-
-    return NULL;
-}
-
+/*
+ * place - given a block to be allocated, decide which part return to user
+ * if remaining space is greater than minimal block size then block will be split
+ * free list also is maintained in this function
+ */
 static void *place(void *bp, size_t size)
 {
     size_t old_size = GET_SIZE(HEADER_PTR(bp));
+
+    remove_free_node(bp);
 
     if (old_size > size + MIN_BLOCK_SIZE)
     {
@@ -236,8 +315,10 @@ static void *place(void *bp, size_t size)
         PUT(header, PACK(size, GET_PRE_ALLOC(header) | CUR_ALLOC));
 
         /* split block */
-        PUT(HEADER_PTR(NEXT_BLOCK(bp)), PACK(old_size - size, PREV_ALLOC));
-        PUT(FOOTER_PTR(NEXT_BLOCK(bp)), PACK(old_size - size, PREV_ALLOC));
+        void *next_bp = NEXT_BLOCK(bp);
+        PUT(HEADER_PTR(next_bp), PACK(old_size - size, PREV_ALLOC));
+        PUT(FOOTER_PTR(next_bp), PACK(old_size - size, PREV_ALLOC));
+        insert_free_node(next_bp);
     }
     else
     {
@@ -277,6 +358,9 @@ int mm_init(void)
     // adjust HEAD point to payload
     HEAD += HEADER_SIZE;
     PUT(HEADER_PTR(HEAD), PACK(MIN_BLOCK_SIZE, CUR_ALLOC));
+
+    /* init free list after HEAD block */
+    init_free_list(HEAD);
 
     /*
      * Epilogue block is a special block which only contains a header
@@ -322,8 +406,8 @@ void *mm_malloc(size_t size)
         }
     }
 
-    place(bp, size);
-    return bp;
+    /* allocated block will be removed from free list when placing */
+    return place(bp, size);
 }
 
 /*
