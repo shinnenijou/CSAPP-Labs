@@ -117,10 +117,14 @@ static int init_free_list()
 {
     FREE_LIST = mem_sbrk(MIN_BLOCK_SIZE);
 
+
     if (FREE_LIST == (void *)-1)
     {
         return -1;
     }
+
+    /* Adjust to point to payload address */
+    FREE_LIST += HEADER_SIZE;
 
     PUT(HEADER_PTR(FREE_LIST) + NEXT_FREE_OFFSET, FREE_LIST);
     PUT(HEADER_PTR(FREE_LIST) + PREV_FREE_OFFSET, FREE_LIST);
