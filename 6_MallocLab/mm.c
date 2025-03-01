@@ -213,7 +213,7 @@ static void *search_fit(size_t request_size)
     {
         void *free_list = FREE_LIST(LARGE_BLOCK_SIZE);
         void *candidate = NULL;
-        size_t candidate_size = ~(size_t)0;
+        size_t candidate_size = 0;
 
         for (void *free_bp = NEXT_FREE_PTR(free_list); free_bp != free_list; free_bp = NEXT_FREE_PTR(free_bp))
         {
@@ -224,7 +224,7 @@ static void *search_fit(size_t request_size)
                 continue;
             }
 
-            if (size < candidate_size)
+            if (size > candidate_size)
             {
                 candidate = free_bp;
                 candidate_size = size;
