@@ -182,11 +182,21 @@ static void remove_free_node(void *bp)
  */
 static void *search_fit(size_t request_size)
 {
+    if (request_size < LARGE_BLOCK_SIZE)
+    {
+        void *free_list = FREE_LIST(request_size);
+        void *first_bp = NEXT_FREE_PTR(free_list);
+
+        if (first_bp != free_list)
+        {
+            return first_bp;
+        }
+    }
 
     void *bp = NULL;
 
     /* first hit for small block */
-    for (size_t size = request_size; size < LARGE_BLOCK_SIZE; size += ALIGNMENT)
+    for (size_t size = request_size + MIN_BLOCK_SIZE; size < LARGE_BLOCK_SIZE; size += ALIGNMENT)
     {
         void *free_list = FREE_LIST(size);
         void *first_bp = NEXT_FREE_PTR(free_list);
@@ -683,6 +693,12 @@ void mm_free(void *bp)
  */
 void *mm_realloc(void *ptr, size_t size)
 {
+    if (size == 0)
+    {
+        mm_free(ptr);
+        return NULL;
+    }
+
     void *old_ptr = ptr;
     size_t old_size = GET_SIZE(HEADER_PTR(old_ptr));
 
@@ -694,19 +710,30 @@ void *mm_realloc(void *ptr, size_t size)
         return old_ptr;
     }
 
-    /* next block is free but space still not enough. free current block then malloc a new*/
+    /* next block is allocated or is free but space still not enough. free current block then malloc a new*/
     if ((old_size < new_size) && (GET_ALLOC(HEADER_PTR(NEXT_BLOCK(old_ptr))) || (GET_SIZE(HEADER_PTR(NEXT_BLOCK(old_ptr))) + old_size < new_size)))
     {
-        void *new_ptr = mm_malloc(new_size);
-
-        if (new_ptr == NULL)
+        /*
+         * this means current block is the last block. We can simply extend heap in this case
+         * then the space will be enough after coalescing with new block
+         */
+        if (GET_SIZE(HEADER_PTR(NEXT_BLOCK(old_ptr))) == 0)
         {
-            return NULL;
+            extend_heap(new_size - old_size);
         }
+        else
+        {
+            void *new_ptr = mm_malloc(new_size);
 
-        memcpy(new_ptr, old_ptr, MIN(new_size - HEADER_SIZE, old_size - HEADER_SIZE));
-        mm_free(old_ptr);
-        return new_ptr;
+            if (new_ptr == NULL)
+            {
+                return NULL;
+            }
+
+            memcpy(new_ptr, old_ptr, MIN(new_size - HEADER_SIZE, old_size - HEADER_SIZE));
+            mm_free(old_ptr);
+            return new_ptr;
+        }
     }
 
     /*
