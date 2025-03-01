@@ -105,7 +105,7 @@ team_t team = {
  */
 static void *FREE_LIST = NULL;
 
-static void *init_free_list(void *bp);
+static int init_free_list();
 static void remove_free_node(void *bp);
 static void insert_free_node(void *bp);
 static void *search_fit(size_t size);
@@ -113,12 +113,19 @@ static void *search_fit(size_t size);
 /*
  * init_free_list - given a sentinel block init a ring dual linked list
  */
-static void *init_free_list(void *bp)
+static int init_free_list()
 {
-    FREE_LIST = bp;
-    PUT(HEADER_PTR(bp) + NEXT_FREE_OFFSET, bp);
-    PUT(HEADER_PTR(bp) + PREV_FREE_OFFSET, bp);
-    return FREE_LIST;
+    FREE_LIST = mem_sbrk(MIN_BLOCK_SIZE);
+
+    if (FREE_LIST == (void *)-1)
+    {
+        return -1;
+    }
+
+    PUT(HEADER_PTR(FREE_LIST) + NEXT_FREE_OFFSET, FREE_LIST);
+    PUT(HEADER_PTR(FREE_LIST) + PREV_FREE_OFFSET, FREE_LIST);
+
+    return 0;
 }
 
 /*
@@ -457,13 +464,20 @@ int mm_init(void)
     /* linux sbrk DO NOT guarantee return a aligned address thus need to align the init address carefully */
     void *cur_heap = mem_sbrk(0);
     void *aligned_heap = (void *)ALIGN((size_t)cur_heap);
+    mem_sbrk(aligned_heap - cur_heap);
+
+    /* init free list. free list. sentinel blocks always place before HEAD */
+    if (init_free_list() == -1)
+    {
+        return -1;
+    }
 
     /*
-     * One block for HEAD, one Epilogue header, plus some bytes to guarantee alignment
+     * One block for HEAD, one Epilogue header
      * now this guaranteed no remaining bytes after TAIL block then we can always
      * use new heap address as new block while extending heap
      */
-    if ((HEAD = mem_sbrk(MIN_BLOCK_SIZE + HEADER_SIZE + (aligned_heap - cur_heap))) == (void *)-1)
+    if ((HEAD = mem_sbrk(MIN_BLOCK_SIZE + HEADER_SIZE)) == (void *)-1)
     {
         return -1;
     }
@@ -473,9 +487,6 @@ int mm_init(void)
     // adjust HEAD point to payload
     HEAD += HEADER_SIZE;
     PUT(HEADER_PTR(HEAD), PACK(MIN_BLOCK_SIZE, CUR_ALLOC));
-
-    /* init free list after HEAD block */
-    init_free_list(HEAD);
 
     /*
      * Epilogue block is a special block which only contains a header
