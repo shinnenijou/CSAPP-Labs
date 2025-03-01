@@ -198,38 +198,6 @@ static void *extend_heap(size_t size);
 static void *coalesce(void *bp);
 static void *place(void *bp, size_t size);
 
-/*********************************************************
- * DEBUG
- ********************************************************/
-
-static void debug_print_list()
-{
-    int i = 0;
-    fprintf(stdout, "======================\n");
-    for (void *bp = HEAD; GET_SIZE(HEADER_PTR(bp)) != 0; bp = NEXT_BLOCK(bp))
-    {
-        size_t alloc = GET_ALLOC(HEADER_PTR(bp));
-        size_t prev_alloc = GET_PRE_ALLOC(HEADER_PTR(bp));
-        size_t size = GET_SIZE(HEADER_PTR(bp));
-        fprintf(stdout, "[%d]free = %d, prev_free = %d, size = %d\n", ++i, !alloc, !prev_alloc, size);
-    }
-    fprintf(stdout, "======================\n");
-}
-
-static void debug_print_free_list()
-{
-    int i = 0;
-    fprintf(stdout, "======================\n");
-    for (void *bp = NEXT_FREE_PTR(FREE_LIST); bp != FREE_LIST; bp = NEXT_FREE_PTR(bp))
-    {
-        size_t alloc = GET_ALLOC(HEADER_PTR(bp));
-        size_t prev_alloc = GET_PRE_ALLOC(HEADER_PTR(bp));
-        size_t size = GET_SIZE(HEADER_PTR(bp));
-        fprintf(stdout, "[%d]free = %d, prev_free = %d, size = %d\n", ++i, !alloc, !prev_alloc, size);
-    }
-    fprintf(stdout, "======================\n");
-}
-
 /*
  * extend_heap - apply for extending heap size to system
  * create a new free block at extending heap then return it
@@ -329,6 +297,153 @@ static void *place(void *bp, size_t size)
     }
 
     return bp;
+}
+
+/*********************************************************
+ * DEBUG
+ ********************************************************/
+
+int mm_check()
+{
+    /* Is every block in the free list marked as free? */
+    for (void *bp = NEXT_FREE_PTR(FREE_LIST); bp != FREE_LIST; bp = NEXT_FREE_PTR(bp))
+    {
+        if (GET_ALLOC(HEADER_PTR(bp)))
+        {
+            fprintf(stderr, "[Consistency Checker] allocated block in free list (%p)\n", bp);
+            return -1;
+        }
+    }
+
+    /* Are there any contiguous free blocks that somehow escaped coalescing? */
+    size_t prev_free = 0;
+
+    for (void *bp = NEXT_BLOCK(HEAD); GET_SIZE(HEADER_PTR(bp)) != 0; bp = NEXT_BLOCK(bp))
+    {
+        if (prev_free && prev_free == !GET_ALLOC(HEADER_PTR(bp)))
+        {
+            fprintf(stderr, "[Consistency Checker] contiguous free blocks (%p)\n", bp);
+            return -1;
+        }
+    }
+
+    /* Is every free block actually in the free list? */
+    for (void *bp = NEXT_BLOCK(HEAD); GET_SIZE(HEADER_PTR(bp)) != 0; bp = NEXT_BLOCK(bp))
+    {
+        if (GET_ALLOC(HEADER_PTR(bp)))
+        {
+            continue;
+        }
+
+        size_t hit = 0;
+
+        for (void *free_bp = NEXT_FREE_PTR(FREE_LIST); free_bp != FREE_LIST; free_bp = NEXT_FREE_PTR(free_bp))
+        {
+            if (free_bp == bp)
+            {
+                hit = 1;
+                break;
+            }
+        }
+
+        if (!hit)
+        {
+            fprintf(stderr, "[Consistency Checker] free block is not in the free list (%p)\n", bp);
+            return -1;
+        }
+    }
+
+    /* Do the pointers in the free list point to valid free blocks? */
+    for (void *bp = NEXT_FREE_PTR(FREE_LIST); bp != FREE_LIST; bp = NEXT_FREE_PTR(bp))
+    {
+        size_t *header = (size_t *)HEADER_PTR(bp);
+        size_t *footer = (size_t *)FOOTER_PTR(bp);
+
+        if (GET_ALLOC(header))
+        {
+            fprintf(stderr, "[Consistency Checker] invalid free block in the free list (%p): is allocated \n", bp);
+            return -1;
+        }
+
+        if (*header != *footer)
+        {
+            fprintf(stderr, "[Consistency Checker] invalid free block in the free list (%p): header and footer are not consistent\n", bp);
+            return -1;
+        }
+
+        if (GET_PRE_ALLOC(HEADER_PTR(NEXT_BLOCK(bp))))
+        {
+            fprintf(stderr, "[Consistency Checker] invalid free block in the free list (%p): next block mark prev allocated\n", bp);
+            return -1;
+        }
+    }
+
+    /* Do any allocated blocks overlap? */
+    size_t prev_start = 0;
+    size_t prev_end = 0;
+
+    for (void *bp = NEXT_BLOCK(HEAD); GET_SIZE(HEADER_PTR(bp)) != 0; bp = NEXT_BLOCK(bp))
+    {
+        if (!GET_ALLOC(HEADER_PTR(bp)))
+        {
+            continue;
+        }
+
+        size_t start = (size_t)bp;
+        size_t end = (size_t)(HEADER_PTR(bp) + GET_SIZE(HEADER_PTR(bp)));
+
+        if (start < prev_end && start >= prev_start)
+        {
+            fprintf(stderr, "[Consistency Checker] allocated blocks overlap (%p)\n", bp);
+            return -1;
+        }
+
+        if (end > prev_start && end <= prev_end)
+        {
+            fprintf(stderr, "[Consistency Checker] allocated blocks overlap (%p)\n", bp);
+            return -1;
+        }
+    }
+
+    /* Do the pointers in a heap block point to valid heap addresses */
+    for (void *bp = HEAD; GET_SIZE(HEADER_PTR(bp)) != 0; bp = NEXT_BLOCK(bp))
+    {
+        if (bp - mem_heap_lo() < 0 || bp - mem_heap_hi() > 0)
+        {
+            fprintf(stderr, "[Consistency Checker] next block point to an invalid heap address (%p)\n", bp);
+            return -1;
+        }
+
+        if ((void *)HEADER_PTR(NEXT_BLOCK(bp)) - mem_heap_lo() < 0 || (void *)HEADER_PTR(NEXT_BLOCK(bp)) - mem_heap_hi() > 0)
+        {
+            fprintf(stderr, "[Consistency Checker] next block point to an invalid heap address (%p)\n", bp);
+            return -1;
+        }
+    }
+
+    /* Do the pointers in a free list block point to valid heap addresses */
+    for (void *bp = NEXT_FREE_PTR(FREE_LIST); bp != FREE_LIST; bp = NEXT_FREE_PTR(bp))
+    {
+        if (bp - mem_heap_lo() < 0 || bp - mem_heap_hi() > 0)
+        {
+            fprintf(stderr, "[Consistency Checker] next block point to an invalid heap address (%p)\n", bp);
+            return -1;
+        }
+
+        if ((void *)HEADER_PTR(NEXT_FREE_PTR(bp)) - mem_heap_lo() < 0 || (void *)HEADER_PTR(NEXT_FREE_PTR(bp)) - mem_heap_hi() > 0)
+        {
+            fprintf(stderr, "[Consistency Checker] next block point to an invalid heap address (%p)\n", bp);
+            return -1;
+        }
+
+        if ((void *)HEADER_PTR(PREV_FREE_PTR(bp)) - mem_heap_lo() < 0 || (void *)HEADER_PTR(PREV_FREE_PTR(bp)) - mem_heap_hi() > 0)
+        {
+            fprintf(stderr, "[Consistency Checker] next block point to an invalid heap address (%p)\n", bp);
+            return -1;
+        }
+    }
+
+    return 0;
 }
 
 /*
