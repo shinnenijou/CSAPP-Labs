@@ -99,7 +99,7 @@ team_t team = {
 /*
  * Free list head node. use ring list implementaion here to avoid corner case
  */
-static void *FREE_LIST_BEGIN = NULL;
+static char *FREE_LIST_BEGIN = NULL;
 
 /*
  * Defined how much the size so-called 'large' to put into the last segregated list
@@ -111,7 +111,7 @@ static void *FREE_LIST_BEGIN = NULL;
 #define PREV_FREE_OFFSET (WSIZE + PSIZE)
 #define NEXT_FREE_PTR(bp) ((void *)GET(HEADER_PTR(bp) + NEXT_FREE_OFFSET))
 #define PREV_FREE_PTR(bp) ((void *)GET(HEADER_PTR(bp) + PREV_FREE_OFFSET))
-#define FREE_LIST(size) ((char *)FREE_LIST_BEGIN + (MIN(size, LARGE_BLOCK_SIZE) / ALIGNMENT - 2) * MIN_BLOCK_SIZE)
+#define FREE_LIST(size) ((char *)FREE_LIST_BEGIN + ((MIN(size, LARGE_BLOCK_SIZE) - MIN_BLOCK_SIZE) / ALIGNMENT) * MIN_BLOCK_SIZE)
 
 static int init_free_list();
 static void remove_free_node(void *bp);
