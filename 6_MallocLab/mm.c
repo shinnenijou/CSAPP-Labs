@@ -35,7 +35,7 @@ team_t team = {
     /* Second member's email address (leave blank if none) */
     ""};
 
-/* single word (4) or double word (8) alignment */
+/* double word (8) alignment */
 #define ALIGNMENT 8
 
 /* Word size. using for header/footer */
@@ -70,6 +70,7 @@ team_t team = {
 #define MARKS_MASK (ALIGNMENT - 1)
 
 #define MAX(x, y) ((x) > (y) ? (x) : (y))
+#define MIN(x, y) ((x) < (y) ? (x) : (y))
 
 /* Pack a size and mark bits in to a word*/
 #define PACK(size, marks) ((size) | (marks))
@@ -95,15 +96,22 @@ team_t team = {
  * FREE LIST operations
  ********************************************************/
 
+/*
+ * Free list head node. use ring list implementaion here to avoid corner case
+ */
+static void *FREE_LIST_BEGIN = NULL;
+
+/*
+ * Defined how much the size so-called 'large' to put into the last segregated list
+ * All block equal or larger than this size will be put into the last list
+ */
+#define LARGE_BLOCK_SIZE 136
+
 #define NEXT_FREE_OFFSET WSIZE
 #define PREV_FREE_OFFSET (WSIZE + PSIZE)
 #define NEXT_FREE_PTR(bp) ((void *)GET(HEADER_PTR(bp) + NEXT_FREE_OFFSET))
 #define PREV_FREE_PTR(bp) ((void *)GET(HEADER_PTR(bp) + PREV_FREE_OFFSET))
-
-/*
- * Free list head node. use ring list implementaion here to avoid corner case
- */
-static void *FREE_LIST = NULL;
+#define FREE_LIST(size) ((char *)FREE_LIST_BEGIN + (MIN(size, LARGE_BLOCK_SIZE) / ALIGNMENT - 2) * MIN_BLOCK_SIZE)
 
 static int init_free_list();
 static void remove_free_node(void *bp);
@@ -115,19 +123,25 @@ static void *search_fit(size_t size);
  */
 static int init_free_list()
 {
-    FREE_LIST = mem_sbrk(MIN_BLOCK_SIZE);
+    /* create segregated list by 8 bytes unit */
+    size_t free_list_num = (LARGE_BLOCK_SIZE - MIN_BLOCK_SIZE) / ALIGNMENT + 1;
+    FREE_LIST_BEGIN = mem_sbrk(free_list_num * MIN_BLOCK_SIZE);
 
-
-    if (FREE_LIST == (void *)-1)
+    if (FREE_LIST_BEGIN == (void *)-1)
     {
         return -1;
     }
 
     /* Adjust to point to payload address */
-    FREE_LIST += HEADER_SIZE;
+    FREE_LIST_BEGIN += HEADER_SIZE;
 
-    PUT(HEADER_PTR(FREE_LIST) + NEXT_FREE_OFFSET, FREE_LIST);
-    PUT(HEADER_PTR(FREE_LIST) + PREV_FREE_OFFSET, FREE_LIST);
+    for (size_t size = MIN_BLOCK_SIZE; size <= LARGE_BLOCK_SIZE; size += ALIGNMENT)
+    {
+        void *free_list = FREE_LIST(size);
+        PUT(HEADER_PTR(free_list), PACK(MIN_BLOCK_SIZE, CUR_ALLOC));
+        PUT(HEADER_PTR(free_list) + NEXT_FREE_OFFSET, free_list);
+        PUT(HEADER_PTR(free_list) + PREV_FREE_OFFSET, free_list);
+    }
 
     return 0;
 }
@@ -137,15 +151,18 @@ static int init_free_list()
  */
 static void insert_free_node(void *bp)
 {
-    void *old_first = NEXT_FREE_PTR(FREE_LIST);
+    size_t size = GET_SIZE(HEADER_PTR(bp));
+    void *free_list = FREE_LIST(size);
+
+    void *old_first = NEXT_FREE_PTR(free_list);
 
     /* link prev node and next node to bp */
-    PUT(HEADER_PTR(FREE_LIST) + NEXT_FREE_OFFSET, bp);
+    PUT(HEADER_PTR(free_list) + NEXT_FREE_OFFSET, bp);
     PUT(HEADER_PTR(old_first) + PREV_FREE_OFFSET, bp);
 
     /* link bp to prev and next node */
     PUT(HEADER_PTR(bp) + NEXT_FREE_OFFSET, old_first);
-    PUT(HEADER_PTR(bp) + PREV_FREE_OFFSET, FREE_LIST);
+    PUT(HEADER_PTR(bp) + PREV_FREE_OFFSET, free_list);
 }
 
 /*
@@ -162,37 +179,52 @@ static void remove_free_node(void *bp)
 
 /*
  * search_fit - Given a request size then search a fit block which size is equal or greater than request size
- *      use best fit strategy here
  */
 static void *search_fit(size_t request_size)
 {
-    void *candidate = NULL;
-    size_t candidate_size = ~(size_t)0;
 
-    for (void *bp = NEXT_FREE_PTR(FREE_LIST); bp != FREE_LIST; bp = NEXT_FREE_PTR(bp))
+    void *bp = NULL;
+
+    /* first hit for small block */
+    for (size_t size = request_size; size < LARGE_BLOCK_SIZE; size += ALIGNMENT)
     {
-        void *header = HEADER_PTR(bp);
+        void *free_list = FREE_LIST(size);
+        void *first_bp = NEXT_FREE_PTR(free_list);
 
-        if (GET_ALLOC(header))
+        if (first_bp != free_list)
         {
-            continue;
-        }
-
-        size_t size = GET_SIZE(header);
-
-        if (size < request_size)
-        {
-            continue;
-        }
-
-        if (size < candidate_size)
-        {
-            candidate = bp;
-            candidate_size = size;
+            bp = first_bp;
+            break;
         }
     }
 
-    return candidate;
+    /* try to find best fit block in large block list.  */
+    if (bp == NULL)
+    {
+        void *free_list = FREE_LIST(LARGE_BLOCK_SIZE);
+        void *candidate = NULL;
+        size_t candidate_size = ~(size_t)0;
+
+        for (void *free_bp = NEXT_FREE_PTR(free_list); free_bp != free_list; free_bp = NEXT_FREE_PTR(free_bp))
+        {
+            size_t size = GET_SIZE(HEADER_PTR(free_bp));
+
+            if (size < request_size)
+            {
+                continue;
+            }
+
+            if (size < candidate_size)
+            {
+                candidate = free_bp;
+                candidate_size = size;
+            }
+        }
+
+        bp = candidate;
+    }
+
+    return bp;
 }
 
 /*********************************************************
@@ -246,7 +278,7 @@ static void *coalesce(void *bp)
 
     if (prev_alloc && next_alloc)
     {
-        insert_free_node(bp);
+        /* do nothing */
     }
     else if (prev_alloc && !next_alloc)
     {
@@ -254,11 +286,10 @@ static void *coalesce(void *bp)
         size += GET_SIZE(HEADER_PTR(NEXT_BLOCK(bp)));
         PUT(HEADER_PTR(bp), PACK(size, prev_alloc));
         PUT(FOOTER_PTR(bp), PACK(size, prev_alloc));
-        insert_free_node(bp);
     }
     else if (!prev_alloc && next_alloc)
     {
-        /* prev block is already in free list */
+        remove_free_node(PREV_BLOCK(bp));
         size += GET_SIZE(HEADER_PTR(PREV_BLOCK(bp)));
         PUT(FOOTER_PTR(bp), PACK(size, GET_PRE_ALLOC(HEADER_PTR(PREV_BLOCK(bp)))));
         PUT(HEADER_PTR(PREV_BLOCK(bp)), PACK(size, GET_PRE_ALLOC(HEADER_PTR(PREV_BLOCK(bp)))));
@@ -266,13 +297,15 @@ static void *coalesce(void *bp)
     }
     else
     {
-        /* prev block is already in free but still need to remove next block */
+        remove_free_node(PREV_BLOCK(bp));
         remove_free_node(NEXT_BLOCK(bp));
         size += GET_SIZE(HEADER_PTR(NEXT_BLOCK(bp))) + GET_SIZE(HEADER_PTR(PREV_BLOCK(bp)));
         PUT(HEADER_PTR(PREV_BLOCK(bp)), PACK(size, GET_PRE_ALLOC(HEADER_PTR(PREV_BLOCK(bp)))));
         PUT(FOOTER_PTR(NEXT_BLOCK(bp)), PACK(size, GET_PRE_ALLOC(HEADER_PTR(PREV_BLOCK(bp)))));
         bp = PREV_BLOCK(bp);
     }
+
+    insert_free_node(bp);
 
     return bp;
 }
@@ -286,21 +319,21 @@ static void *place(void *bp, size_t size)
 {
     size_t old_size = GET_SIZE(HEADER_PTR(bp));
 
+    remove_free_node(bp);
+
     if (old_size > size + MIN_BLOCK_SIZE)
     {
         void *header = HEADER_PTR(bp);
-        PUT(header, PACK(old_size - size, GET_PRE_ALLOC(header)));
-        PUT(FOOTER_PTR(bp), PACK(old_size - size, GET_PRE_ALLOC(header)));
+        PUT(header, PACK(size, GET_PRE_ALLOC(header) | CUR_ALLOC));
 
         /* split block */
-        bp = NEXT_BLOCK(bp);
-        PUT(HEADER_PTR(bp), PACK(size, CUR_ALLOC));
-        void *next_header = HEADER_PTR(NEXT_BLOCK(bp));
-        PUT(next_header, PACK(GET_SIZE(next_header), PREV_ALLOC | GET_ALLOC(next_header)));
+        void *next_bp = NEXT_BLOCK(bp);
+        PUT(HEADER_PTR(next_bp), PACK(old_size - size, PREV_ALLOC));
+        PUT(FOOTER_PTR(next_bp), PACK(old_size - size, PREV_ALLOC));
+        insert_free_node(next_bp);
     }
     else
     {
-        remove_free_node(bp);
         void *header = HEADER_PTR(bp);
         void *next_header = HEADER_PTR(NEXT_BLOCK(bp));
         PUT(header, PACK(old_size, GET_PRE_ALLOC(header) | CUR_ALLOC));
@@ -314,145 +347,230 @@ static void *place(void *bp, size_t size)
  * DEBUG
  ********************************************************/
 
-int mm_check()
+#define DEBUG_MARK 0x4
+#define HAS_DEBUG_MARK(p) (GET(p) & DEBUG_MARK)
+
+static void print_free_list()
 {
-    /* Is every block in the free list marked as free? */
-    for (void *bp = NEXT_FREE_PTR(FREE_LIST); bp != FREE_LIST; bp = NEXT_FREE_PTR(bp))
+    fprintf(stdout, "--------------------------\n");
+
+    for (size_t size = MIN_BLOCK_SIZE; size <= LARGE_BLOCK_SIZE; size += ALIGNMENT)
+    {
+        void *free_list = FREE_LIST(size);
+
+        if (NEXT_FREE_PTR(free_list) == free_list)
+        {
+            continue;
+        }
+
+        fprintf(stdout, "[size = %d]{(%p)size = %d}", size, free_list, GET_SIZE(HEADER_PTR(free_list)));
+
+        for (void *bp = NEXT_FREE_PTR(free_list); bp != free_list; bp = NEXT_FREE_PTR(bp))
+        {
+            fprintf(stdout, " <-> {(%p)size = %d}", bp, GET_SIZE(HEADER_PTR(bp)));
+        }
+
+        fprintf(stdout, "\n");
+    }
+
+    fflush(stdout);
+}
+
+/* Is every block in the free list marked as free? */
+static int check_free_list_all_free(void *free_list)
+{
+    for (void *bp = NEXT_FREE_PTR(free_list); bp != free_list; bp = NEXT_FREE_PTR(bp))
     {
         if (GET_ALLOC(HEADER_PTR(bp)))
         {
-            fprintf(stderr, "[Consistency Checker] allocated block in free list (%p)\n", bp);
+            fprintf(stderr, "[Consistency Checker]allocated block in free list (%p)\n", bp);
+            return -1;
+        }
+    }
+
+    return 0;
+}
+
+/* Is every block in the free list has the same size? */
+static int check_free_list_same_size(void *free_list, size_t size)
+{
+    for (void *bp = NEXT_FREE_PTR(free_list); bp != free_list; bp = NEXT_FREE_PTR(bp))
+    {
+        if (GET_SIZE(HEADER_PTR(bp)) != size)
+        {
+            fprintf(stderr, "[Consistency Checker]wrong size in free list (%p), expect: %d, get: %d\n", bp, size, GET_SIZE(HEADER_PTR(bp)));
+            return -1;
+        }
+    }
+
+    return 0;
+}
+
+static int mark_block_in_free_list(void *free_list, int mark)
+{
+    for (void *bp = NEXT_FREE_PTR(free_list); bp != free_list; bp = NEXT_FREE_PTR(bp))
+    {
+        if (mark)
+        {
+            PUT(HEADER_PTR(bp), GET(HEADER_PTR(bp)) | DEBUG_MARK);
+        }
+        else
+        {
+            PUT(HEADER_PTR(bp), GET(HEADER_PTR(bp)) & ~DEBUG_MARK);
+        }
+    }
+
+    return 0;
+}
+
+int mm_check()
+{
+    for (size_t size = MIN_BLOCK_SIZE; size <= LARGE_BLOCK_SIZE; size += ALIGNMENT)
+    {
+        if (check_free_list_all_free(FREE_LIST(size)) != 0)
+        {
+            return -1;
+        }
+    }
+
+    for (size_t size = MIN_BLOCK_SIZE; size < LARGE_BLOCK_SIZE; size += ALIGNMENT)
+    {
+        if (check_free_list_same_size(FREE_LIST(size), size) != 0)
+        {
             return -1;
         }
     }
 
     /* Are there any contiguous free blocks that somehow escaped coalescing? */
-    size_t prev_free = 0;
-
-    for (void *bp = NEXT_BLOCK(HEAD); GET_SIZE(HEADER_PTR(bp)) != 0; bp = NEXT_BLOCK(bp))
     {
-        if (prev_free && prev_free == !GET_ALLOC(HEADER_PTR(bp)))
+        size_t prev_free = 0;
+
+        for (void *bp = NEXT_BLOCK(HEAD); GET_SIZE(HEADER_PTR(bp)) != 0; bp = NEXT_BLOCK(bp))
         {
-            fprintf(stderr, "[Consistency Checker] contiguous free blocks (%p)\n", bp);
-            return -1;
+            if (prev_free && prev_free == !GET_ALLOC(HEADER_PTR(bp)))
+            {
+                fprintf(stderr, "[Consistency Checker]contiguous free blocks (%p)\n", bp);
+                return -1;
+            }
         }
     }
 
     /* Is every free block actually in the free list? */
-    for (void *bp = NEXT_BLOCK(HEAD); GET_SIZE(HEADER_PTR(bp)) != 0; bp = NEXT_BLOCK(bp))
     {
-        if (GET_ALLOC(HEADER_PTR(bp)))
+        for (size_t size = MIN_BLOCK_SIZE; size <= LARGE_BLOCK_SIZE; size += ALIGNMENT)
         {
-            continue;
+            mark_block_in_free_list(FREE_LIST(size), 1);
         }
 
-        size_t hit = 0;
-
-        for (void *free_bp = NEXT_FREE_PTR(FREE_LIST); free_bp != FREE_LIST; free_bp = NEXT_FREE_PTR(free_bp))
+        for (void *bp = NEXT_BLOCK(HEAD); GET_SIZE(HEADER_PTR(bp)) != 0; bp = NEXT_BLOCK(bp))
         {
-            if (free_bp == bp)
+            if (GET_ALLOC(HEADER_PTR(bp)))
             {
-                hit = 1;
-                break;
+                continue;
+            }
+
+            if (!HAS_DEBUG_MARK(HEADER_PTR(bp)))
+            {
+                fprintf(stderr, "[Consistency Checker]free block not in free list (%p), size = %d\n", bp, GET_SIZE(HEADER_PTR(bp)));
+                return -1;
             }
         }
 
-        if (!hit)
+        for (size_t size = MIN_BLOCK_SIZE; size <= LARGE_BLOCK_SIZE; size += ALIGNMENT)
         {
-            fprintf(stderr, "[Consistency Checker] free block is not in the free list (%p)\n", bp);
-            return -1;
+            mark_block_in_free_list(FREE_LIST(size), 0);
         }
     }
 
-    /* Do the pointers in the free list point to valid free blocks? */
-    for (void *bp = NEXT_FREE_PTR(FREE_LIST); bp != FREE_LIST; bp = NEXT_FREE_PTR(bp))
-    {
-        size_t *header = (size_t *)HEADER_PTR(bp);
-        size_t *footer = (size_t *)FOOTER_PTR(bp);
+    //     /* Do the pointers in the free list point to valid free blocks? */
+    //     for (void *bp = NEXT_FREE_PTR(FREE_LIST); bp != FREE_LIST; bp = NEXT_FREE_PTR(bp))
+    //     {
+    //         size_t *header = (size_t *)HEADER_PTR(bp);
+    //         size_t *footer = (size_t *)FOOTER_PTR(bp);
 
-        if (GET_ALLOC(header))
-        {
-            fprintf(stderr, "[Consistency Checker] invalid free block in the free list (%p): is allocated \n", bp);
-            return -1;
-        }
+    //         if (GET_ALLOC(header))
+    //         {
+    //             fprintf(stderr, "[Consistency Checker] invalid free block in the free list (%p): is allocated \n", bp);
+    //             return -1;
+    //         }
 
-        if (*header != *footer)
-        {
-            fprintf(stderr, "[Consistency Checker] invalid free block in the free list (%p): header and footer are not consistent\n", bp);
-            return -1;
-        }
+    //         if (*header != *footer)
+    //         {
+    //             fprintf(stderr, "[Consistency Checker] invalid free block in the free list (%p): header and footer are not consistent\n", bp);
+    //             return -1;
+    //         }
 
-        if (GET_PRE_ALLOC(HEADER_PTR(NEXT_BLOCK(bp))))
-        {
-            fprintf(stderr, "[Consistency Checker] invalid free block in the free list (%p): next block mark prev allocated\n", bp);
-            return -1;
-        }
-    }
+    //         if (GET_PRE_ALLOC(HEADER_PTR(NEXT_BLOCK(bp))))
+    //         {
+    //             fprintf(stderr, "[Consistency Checker] invalid free block in the free list (%p): next block mark prev allocated\n", bp);
+    //             return -1;
+    //         }
+    //     }
 
-    /* Do any allocated blocks overlap? */
-    size_t prev_start = 0;
-    size_t prev_end = 0;
+    //     /* Do any allocated blocks overlap? */
+    //     size_t prev_start = 0;
+    //     size_t prev_end = 0;
 
-    for (void *bp = NEXT_BLOCK(HEAD); GET_SIZE(HEADER_PTR(bp)) != 0; bp = NEXT_BLOCK(bp))
-    {
-        if (!GET_ALLOC(HEADER_PTR(bp)))
-        {
-            continue;
-        }
+    //     for (void *bp = NEXT_BLOCK(HEAD); GET_SIZE(HEADER_PTR(bp)) != 0; bp = NEXT_BLOCK(bp))
+    //     {
+    //         if (!GET_ALLOC(HEADER_PTR(bp)))
+    //         {
+    //             continue;
+    //         }
 
-        size_t start = (size_t)bp;
-        size_t end = (size_t)(HEADER_PTR(bp) + GET_SIZE(HEADER_PTR(bp)));
+    //         size_t start = (size_t)bp;
+    //         size_t end = (size_t)(HEADER_PTR(bp) + GET_SIZE(HEADER_PTR(bp)));
 
-        if (start < prev_end && start >= prev_start)
-        {
-            fprintf(stderr, "[Consistency Checker] allocated blocks overlap (%p)\n", bp);
-            return -1;
-        }
+    //         if (start < prev_end && start >= prev_start)
+    //         {
+    //             fprintf(stderr, "[Consistency Checker] allocated blocks overlap (%p)\n", bp);
+    //             return -1;
+    //         }
 
-        if (end > prev_start && end <= prev_end)
-        {
-            fprintf(stderr, "[Consistency Checker] allocated blocks overlap (%p)\n", bp);
-            return -1;
-        }
-    }
+    //         if (end > prev_start && end <= prev_end)
+    //         {
+    //             fprintf(stderr, "[Consistency Checker] allocated blocks overlap (%p)\n", bp);
+    //             return -1;
+    //         }
+    //     }
 
-    /* Do the pointers in a heap block point to valid heap addresses */
-    for (void *bp = HEAD; GET_SIZE(HEADER_PTR(bp)) != 0; bp = NEXT_BLOCK(bp))
-    {
-        if (bp - mem_heap_lo() < 0 || bp - mem_heap_hi() > 0)
-        {
-            fprintf(stderr, "[Consistency Checker] next block point to an invalid heap address (%p)\n", bp);
-            return -1;
-        }
+    //     /* Do the pointers in a heap block point to valid heap addresses */
+    //     for (void *bp = HEAD; GET_SIZE(HEADER_PTR(bp)) != 0; bp = NEXT_BLOCK(bp))
+    //     {
+    //         if (bp - mem_heap_lo() < 0 || bp - mem_heap_hi() > 0)
+    //         {
+    //             fprintf(stderr, "[Consistency Checker] next block point to an invalid heap address (%p)\n", bp);
+    //             return -1;
+    //         }
 
-        if ((void *)HEADER_PTR(NEXT_BLOCK(bp)) - mem_heap_lo() < 0 || (void *)HEADER_PTR(NEXT_BLOCK(bp)) - mem_heap_hi() > 0)
-        {
-            fprintf(stderr, "[Consistency Checker] next block point to an invalid heap address (%p)\n", bp);
-            return -1;
-        }
-    }
+    //         if ((void *)HEADER_PTR(NEXT_BLOCK(bp)) - mem_heap_lo() < 0 || (void *)HEADER_PTR(NEXT_BLOCK(bp)) - mem_heap_hi() > 0)
+    //         {
+    //             fprintf(stderr, "[Consistency Checker] next block point to an invalid heap address (%p)\n", bp);
+    //             return -1;
+    //         }
+    //     }
 
-    /* Do the pointers in a free list block point to valid heap addresses */
-    for (void *bp = NEXT_FREE_PTR(FREE_LIST); bp != FREE_LIST; bp = NEXT_FREE_PTR(bp))
-    {
-        if (bp - mem_heap_lo() < 0 || bp - mem_heap_hi() > 0)
-        {
-            fprintf(stderr, "[Consistency Checker] next block point to an invalid heap address (%p)\n", bp);
-            return -1;
-        }
+    //     /* Do the pointers in a free list block point to valid heap addresses */
+    //     for (void *bp = NEXT_FREE_PTR(FREE_LIST); bp != FREE_LIST; bp = NEXT_FREE_PTR(bp))
+    //     {
+    //         if (bp - mem_heap_lo() < 0 || bp - mem_heap_hi() > 0)
+    //         {
+    //             fprintf(stderr, "[Consistency Checker] next block point to an invalid heap address (%p)\n", bp);
+    //             return -1;
+    //         }
 
-        if ((void *)HEADER_PTR(NEXT_FREE_PTR(bp)) - mem_heap_lo() < 0 || (void *)HEADER_PTR(NEXT_FREE_PTR(bp)) - mem_heap_hi() > 0)
-        {
-            fprintf(stderr, "[Consistency Checker] next block point to an invalid heap address (%p)\n", bp);
-            return -1;
-        }
+    //         if ((void *)HEADER_PTR(NEXT_FREE_PTR(bp)) - mem_heap_lo() < 0 || (void *)HEADER_PTR(NEXT_FREE_PTR(bp)) - mem_heap_hi() > 0)
+    //         {
+    //             fprintf(stderr, "[Consistency Checker] next block point to an invalid heap address (%p)\n", bp);
+    //             return -1;
+    //         }
 
-        if ((void *)HEADER_PTR(PREV_FREE_PTR(bp)) - mem_heap_lo() < 0 || (void *)HEADER_PTR(PREV_FREE_PTR(bp)) - mem_heap_hi() > 0)
-        {
-            fprintf(stderr, "[Consistency Checker] next block point to an invalid heap address (%p)\n", bp);
-            return -1;
-        }
-    }
+    //         if ((void *)HEADER_PTR(PREV_FREE_PTR(bp)) - mem_heap_lo() < 0 || (void *)HEADER_PTR(PREV_FREE_PTR(bp)) - mem_heap_hi() > 0)
+    //         {
+    //             fprintf(stderr, "[Consistency Checker] next block point to an invalid heap address (%p)\n", bp);
+    //             return -1;
+    //         }
+    //     }
 
     return 0;
 }
