@@ -753,12 +753,9 @@ void *mm_realloc(void *ptr, size_t size)
      */
     size_t old_next = GET(HEADER_PTR(old_ptr) + NEXT_FREE_OFFSET);
     size_t old_prev = GET(HEADER_PTR(old_ptr) + PREV_FREE_OFFSET);
-    size_t old_footer = GET(FOOTER_PTR(old_ptr));
-    void *old_fp = FOOTER_PTR(old_ptr);
 
     /* keep previous block's allocated status and set current to free*/
     PUT(HEADER_PTR(old_ptr), MARK_FREE(GET(HEADER_PTR(old_ptr))));
-    PUT(FOOTER_PTR(old_ptr), GET(HEADER_PTR(old_ptr)));
 
     /* set next block's previous block status to free*/
     PUT(HEADER_PTR(NEXT_BLOCK(old_ptr)), MARK_PRE_FREE(GET(HEADER_PTR(NEXT_BLOCK(old_ptr)))));
@@ -776,11 +773,6 @@ void *mm_realloc(void *ptr, size_t size)
 
     PUT(HEADER_PTR(old_ptr) + NEXT_FREE_OFFSET, old_next);
     PUT(HEADER_PTR(old_ptr) + PREV_FREE_OFFSET, old_prev);
-
-    if (new_size > old_size)
-    {
-        PUT(old_fp, old_footer);
-    }
 
     return old_ptr;
 }
