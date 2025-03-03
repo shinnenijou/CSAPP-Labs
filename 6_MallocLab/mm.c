@@ -252,12 +252,14 @@ static void *coalesce(void *bp);
 static void *place(void *bp, size_t size);
 
 /*
- * extend_heap - apply for extending heap size to system
- * create a new free block at extending heap then return it
+ * extend_heap - apply for extending heap size to system.
+ * create a new free block at extending heap then return it.
+ * new block may be larger than given size for min size reason
  */
 static void *extend_heap(size_t size)
 {
     size = ALIGN(size);
+    size = MAX(size, MIN_BLOCK_SIZE);
     void *bp;
 
     if ((bp = mem_sbrk(size)) == (void *)-1)
