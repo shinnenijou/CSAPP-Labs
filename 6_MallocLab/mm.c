@@ -55,7 +55,7 @@ team_t team = {
 #define MIN_BLOCK_SIZE (ALIGN(WSIZE + PSIZE + PSIZE + WSIZE))
 
 /* typical page size. always extend heap by this amount */
-#define CHUNK_SIZE (1 << 12)
+#define CHUNK_SIZE (1 << 10)
 
 /*********************************************************
  * Implicit list implementation
@@ -658,7 +658,14 @@ void *mm_malloc(size_t size)
     /* Try to extend heap if no fit found */
     if ((bp = search_fit(size)) == NULL)
     {
-        size_t extend_size = MAX(size, CHUNK_SIZE);
+        void *epilogue = (char *)mem_heap_hi() + 1;
+
+        size_t extend_size = size;
+
+        if (!GET_PRE_ALLOC(HEADER_PTR(epilogue)))
+        {
+            extend_size = size - GET_SIZE(HEADER_PTR(PREV_BLOCK(epilogue)));
+        }
 
         if ((bp = extend_heap(extend_size)) == NULL)
         {
