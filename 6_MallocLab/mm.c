@@ -81,8 +81,15 @@ team_t team = {
 
 /* Read the size and alloc marks from address p */
 #define GET_SIZE(p) (GET(p) & ~MARKS_MASK)
+#define NEW_SIZE(p, val) ((GET(p) & MARKS_MASK) | (val))
+
 #define GET_ALLOC(p) (GET(p) & CUR_ALLOC)
+#define MARK_ALLOC(val) ((val) | CUR_ALLOC)
+#define MARK_FREE(val) ((val) & ~CUR_ALLOC)
+
 #define GET_PRE_ALLOC(p) (GET(p) & PREV_ALLOC)
+#define MARK_PRE_ALLOC(val) ((val) | PREV_ALLOC)
+#define MARK_PRE_FREE(val) ((val) & ~PREV_ALLOC)
 
 /* Given block ptr(ptr to be returning to user), compute address of its header and footer */
 #define HEADER_PTR(bp) ((char *)(bp) - HEADER_SIZE)
@@ -140,7 +147,7 @@ static int init_free_list()
     for (size_t size = MIN_BLOCK_SIZE; size <= LARGE_BLOCK_SIZE; size += ALIGNMENT)
     {
         void *free_list = FREE_LIST(size);
-        PUT(HEADER_PTR(free_list), PACK(MIN_BLOCK_SIZE, CUR_ALLOC));
+        PUT(HEADER_PTR(free_list), 0);
         PUT(HEADER_PTR(free_list) + NEXT_FREE_OFFSET, free_list);
         PUT(HEADER_PTR(free_list) + PREV_FREE_OFFSET, free_list);
     }
@@ -156,12 +163,11 @@ static void *split_to_small(void *bp, size_t size)
     /* backup */
     void *first_bp = bp;
     size_t prev_alloc = GET_PRE_ALLOC(HEADER_PTR(bp));
-
     size_t rest_size = GET_SIZE(HEADER_PTR(bp));
 
     while (rest_size >= MIN_BLOCK_SIZE + size)
     {
-        PUT(HEADER_PTR(bp), PACK(size, 0));
+        PUT(HEADER_PTR(bp), MARK_PRE_FREE(MARK_FREE(size)));
         PUT(FOOTER_PTR(bp), GET(HEADER_PTR(bp)));
         insert_free_node(bp);
         rest_size -= size;
@@ -169,12 +175,12 @@ static void *split_to_small(void *bp, size_t size)
     }
 
     /* last block */
-    PUT(HEADER_PTR(bp), PACK(rest_size, 0));
+    PUT(HEADER_PTR(bp), MARK_PRE_FREE(MARK_FREE(rest_size)));
     PUT(FOOTER_PTR(bp), GET(HEADER_PTR(bp)));
     insert_free_node(bp);
 
     /* restore first block */
-    PUT(HEADER_PTR(first_bp), PACK(GET_SIZE(HEADER_PTR(first_bp)), prev_alloc));
+    PUT(HEADER_PTR(first_bp), GET(HEADER_PTR(first_bp)) | prev_alloc);
     PUT(FOOTER_PTR(first_bp), GET(HEADER_PTR(first_bp)));
 
     return first_bp;
@@ -288,11 +294,11 @@ static void *extend_heap(size_t size)
     }
 
     /* keep previous block's allocated status */
-    PUT(HEADER_PTR(bp), PACK(size, GET_PRE_ALLOC(HEADER_PTR(bp))));
-    PUT(FOOTER_PTR(bp), PACK(size, GET_PRE_ALLOC(HEADER_PTR(bp))));
+    PUT(HEADER_PTR(bp), MARK_FREE(NEW_SIZE(HEADER_PTR(bp), size)));
+    PUT(FOOTER_PTR(bp), GET(HEADER_PTR(bp)));
 
     /* new epilogue block*/
-    PUT(HEADER_PTR(NEXT_BLOCK(bp)), PACK(0, CUR_ALLOC));
+    PUT(HEADER_PTR(NEXT_BLOCK(bp)), MARK_ALLOC(0));
 
     /* new block will be inserted to free list when coalescing */
     return coalesce(bp);
@@ -316,15 +322,15 @@ static void *coalesce(void *bp)
     {
         remove_free_node(NEXT_BLOCK(bp));
         size += GET_SIZE(HEADER_PTR(NEXT_BLOCK(bp)));
-        PUT(HEADER_PTR(bp), PACK(size, prev_alloc));
-        PUT(FOOTER_PTR(bp), PACK(size, prev_alloc));
+        PUT(HEADER_PTR(bp), MARK_PRE_ALLOC(size));
+        PUT(FOOTER_PTR(bp), MARK_PRE_ALLOC(size));
     }
     else if (!prev_alloc && next_alloc)
     {
         remove_free_node(PREV_BLOCK(bp));
         size += GET_SIZE(HEADER_PTR(PREV_BLOCK(bp)));
-        PUT(FOOTER_PTR(bp), PACK(size, GET_PRE_ALLOC(HEADER_PTR(PREV_BLOCK(bp)))));
-        PUT(HEADER_PTR(PREV_BLOCK(bp)), PACK(size, GET_PRE_ALLOC(HEADER_PTR(PREV_BLOCK(bp)))));
+        PUT(HEADER_PTR(PREV_BLOCK(bp)), NEW_SIZE(HEADER_PTR(PREV_BLOCK(bp)), size));
+        PUT(FOOTER_PTR(bp), GET(HEADER_PTR(PREV_BLOCK(bp))));
         bp = PREV_BLOCK(bp);
     }
     else
@@ -332,8 +338,8 @@ static void *coalesce(void *bp)
         remove_free_node(PREV_BLOCK(bp));
         remove_free_node(NEXT_BLOCK(bp));
         size += GET_SIZE(HEADER_PTR(NEXT_BLOCK(bp))) + GET_SIZE(HEADER_PTR(PREV_BLOCK(bp)));
-        PUT(HEADER_PTR(PREV_BLOCK(bp)), PACK(size, GET_PRE_ALLOC(HEADER_PTR(PREV_BLOCK(bp)))));
-        PUT(FOOTER_PTR(NEXT_BLOCK(bp)), PACK(size, GET_PRE_ALLOC(HEADER_PTR(PREV_BLOCK(bp)))));
+        PUT(HEADER_PTR(PREV_BLOCK(bp)), NEW_SIZE(HEADER_PTR(PREV_BLOCK(bp)), size));
+        PUT(FOOTER_PTR(NEXT_BLOCK(bp)), GET(HEADER_PTR(PREV_BLOCK(bp))));
         bp = PREV_BLOCK(bp);
     }
 
@@ -356,20 +362,21 @@ static void *place(void *bp, size_t size)
     if (old_size > size + MIN_BLOCK_SIZE)
     {
         void *header = HEADER_PTR(bp);
-        PUT(header, PACK(size, GET_PRE_ALLOC(header) | CUR_ALLOC));
+        PUT(header, MARK_ALLOC(NEW_SIZE(header, size)));
 
         /* split block */
         void *next_bp = NEXT_BLOCK(bp);
-        PUT(HEADER_PTR(next_bp), PACK(old_size - size, PREV_ALLOC));
-        PUT(FOOTER_PTR(next_bp), PACK(old_size - size, PREV_ALLOC));
+        PUT(HEADER_PTR(next_bp), MARK_PRE_ALLOC(MARK_FREE(NEW_SIZE(HEADER_PTR(next_bp), old_size - size))));
+        PUT(FOOTER_PTR(next_bp), GET(HEADER_PTR(next_bp)));
         insert_free_node(next_bp);
     }
     else
     {
         void *header = HEADER_PTR(bp);
         void *next_header = HEADER_PTR(NEXT_BLOCK(bp));
-        PUT(header, PACK(old_size, GET_PRE_ALLOC(header) | CUR_ALLOC));
-        PUT(next_header, PACK(GET_SIZE(next_header), PREV_ALLOC | GET_ALLOC(next_header)));
+
+        PUT(header, MARK_ALLOC(GET(header)));
+        PUT(next_header, MARK_PRE_ALLOC(GET(next_header)));
     }
 
     return bp;
@@ -640,13 +647,13 @@ int mm_init(void)
 
     // adjust HEAD point to payload
     HEAD += HEADER_SIZE;
-    PUT(HEADER_PTR(HEAD), PACK(MIN_BLOCK_SIZE, CUR_ALLOC));
+    PUT(HEADER_PTR(HEAD), MARK_ALLOC(MIN_BLOCK_SIZE));
 
     /*
      * Epilogue block is a special block which only contains a header
      * then every time extending the heap, Epilogue block become the header of new block
      */
-    PUT(HEADER_PTR(NEXT_BLOCK(HEAD)), PACK(0, CUR_ALLOC | PREV_ALLOC));
+    PUT(HEADER_PTR(NEXT_BLOCK(HEAD)), MARK_PRE_ALLOC(MARK_ALLOC(0)));
 
     return 0;
 }
@@ -693,16 +700,12 @@ void *mm_malloc(size_t size)
  */
 void mm_free(void *bp)
 {
-    void *hp = HEADER_PTR(bp);
-    size_t size = GET_SIZE(hp);
-
     /* keep previous block's allocated status and set current to free*/
-    PUT(hp, PACK(size, GET_PRE_ALLOC(hp)));
-    PUT(FOOTER_PTR(bp), GET(hp));
+    PUT(HEADER_PTR(bp), MARK_FREE(GET(HEADER_PTR(bp))));
+    PUT(FOOTER_PTR(bp), GET(HEADER_PTR(bp)));
 
     /* set next block's previous block status to free*/
-    void *next_hp = HEADER_PTR(NEXT_BLOCK(bp));
-    PUT(next_hp, PACK(GET_SIZE(next_hp), GET_ALLOC(next_hp)));
+    PUT(HEADER_PTR(NEXT_BLOCK(bp)), MARK_PRE_FREE(GET(HEADER_PTR(NEXT_BLOCK(bp)))));
 
     coalesce(bp);
 }
@@ -766,17 +769,17 @@ void *mm_realloc(void *ptr, size_t size)
     void *old_fp = FOOTER_PTR(old_ptr);
 
     /* keep previous block's allocated status and set current to free*/
-    PUT(HEADER_PTR(old_ptr), PACK(old_size, GET_PRE_ALLOC(HEADER_PTR(old_ptr))));
+    PUT(HEADER_PTR(old_ptr), MARK_FREE(GET(HEADER_PTR(old_ptr))));
     PUT(FOOTER_PTR(old_ptr), GET(HEADER_PTR(old_ptr)));
 
     /* set next block's previous block status to free*/
-    PUT(HEADER_PTR(NEXT_BLOCK(old_ptr)), PACK(GET_SIZE(HEADER_PTR(NEXT_BLOCK(old_ptr))), GET_ALLOC(HEADER_PTR(NEXT_BLOCK(old_ptr)))));
+    PUT(HEADER_PTR(NEXT_BLOCK(old_ptr)), MARK_PRE_FREE(GET(HEADER_PTR(NEXT_BLOCK(old_ptr)))));
 
     /* try to coalesce with next block */
     if (!GET_ALLOC(HEADER_PTR(NEXT_BLOCK(old_ptr))))
     {
         remove_free_node(NEXT_BLOCK(old_ptr));
-        PUT(HEADER_PTR(old_ptr), PACK(old_size + GET_SIZE(HEADER_PTR(NEXT_BLOCK(old_ptr))), GET_PRE_ALLOC(HEADER_PTR(old_ptr))));
+        PUT(HEADER_PTR(old_ptr), NEW_SIZE(HEADER_PTR(old_ptr), old_size + GET_SIZE(HEADER_PTR(NEXT_BLOCK(old_ptr)))));
         PUT(FOOTER_PTR(old_ptr), GET(HEADER_PTR(old_ptr)));
     }
 
