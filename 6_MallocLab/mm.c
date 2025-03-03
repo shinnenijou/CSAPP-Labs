@@ -672,8 +672,13 @@ void *mm_malloc(size_t size)
             bp = extend_heap(size * SMALL_BLOCK_NUM);
             bp = split_to_small(bp, size);
         }
+        else if (size < CHUNK_SIZE)
+        {
+            bp = extend_heap(size);
+        }
         else
         {
+            size += ALIGN(size >> 3);
             bp = extend_heap(size);
         }
     }
@@ -714,11 +719,6 @@ void *mm_realloc(void *ptr, size_t size)
 
     size_t new_size = ALIGN(size) + HEADER_SIZE;
     new_size = MAX(new_size, MIN_BLOCK_SIZE);
-
-    if (new_size == old_size)
-    {
-        return old_ptr;
-    }
 
     /* next block is allocated or is free but space still not enough. free current block then malloc a new*/
     if ((old_size < new_size) && (GET_ALLOC(HEADER_PTR(NEXT_BLOCK(old_ptr))) || (GET_SIZE(HEADER_PTR(NEXT_BLOCK(old_ptr))) + old_size < new_size)))
