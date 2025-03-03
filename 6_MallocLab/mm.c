@@ -314,33 +314,21 @@ static void *coalesce(void *bp)
     size_t next_alloc = GET_ALLOC(HEADER_PTR(NEXT_BLOCK(bp)));
     size_t size = GET_SIZE(HEADER_PTR(bp));
 
-    if (prev_alloc && next_alloc)
-    {
-        /* do nothing */
-    }
-    else if (prev_alloc && !next_alloc)
+    if (!next_alloc)
     {
         remove_free_node(NEXT_BLOCK(bp));
         size += GET_SIZE(HEADER_PTR(NEXT_BLOCK(bp)));
-        PUT(HEADER_PTR(bp), MARK_PRE_ALLOC(size));
-        PUT(FOOTER_PTR(bp), MARK_PRE_ALLOC(size));
+        PUT(HEADER_PTR(bp), NEW_SIZE(HEADER_PTR(bp), size));
+        PUT(FOOTER_PTR(bp), GET(HEADER_PTR(bp)));
     }
-    else if (!prev_alloc && next_alloc)
+
+    if (!prev_alloc)
     {
-        remove_free_node(PREV_BLOCK(bp));
-        size += GET_SIZE(HEADER_PTR(PREV_BLOCK(bp)));
-        PUT(HEADER_PTR(PREV_BLOCK(bp)), NEW_SIZE(HEADER_PTR(PREV_BLOCK(bp)), size));
-        PUT(FOOTER_PTR(bp), GET(HEADER_PTR(PREV_BLOCK(bp))));
         bp = PREV_BLOCK(bp);
-    }
-    else
-    {
-        remove_free_node(PREV_BLOCK(bp));
-        remove_free_node(NEXT_BLOCK(bp));
-        size += GET_SIZE(HEADER_PTR(NEXT_BLOCK(bp))) + GET_SIZE(HEADER_PTR(PREV_BLOCK(bp)));
-        PUT(HEADER_PTR(PREV_BLOCK(bp)), NEW_SIZE(HEADER_PTR(PREV_BLOCK(bp)), size));
-        PUT(FOOTER_PTR(NEXT_BLOCK(bp)), GET(HEADER_PTR(PREV_BLOCK(bp))));
-        bp = PREV_BLOCK(bp);
+        remove_free_node(bp);
+        size += GET_SIZE(HEADER_PTR(bp));
+        PUT(HEADER_PTR(bp), NEW_SIZE(HEADER_PTR(bp), size));
+        PUT(FOOTER_PTR(bp), GET(HEADER_PTR(bp)));
     }
 
     insert_free_node(bp);
