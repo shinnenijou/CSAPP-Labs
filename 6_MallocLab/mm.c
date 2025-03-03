@@ -55,7 +55,7 @@ team_t team = {
 #define MIN_BLOCK_SIZE (ALIGN(WSIZE + PSIZE + PSIZE + WSIZE))
 
 /* typical page size. always extend heap by this amount */
-#define CHUNK_SIZE (1 << 10)
+#define CHUNK_SIZE (1 << 12)
 
 /*********************************************************
  * Implicit list implementation
@@ -106,6 +106,7 @@ static char *FREE_LIST_BEGIN = NULL;
  * All block equal or larger than this size will be put into the last list
  */
 #define LARGE_BLOCK_SIZE 136
+#define SMALL_BLOCK_NUM 32
 
 #define NEXT_FREE_OFFSET WSIZE
 #define PREV_FREE_OFFSET (WSIZE + PSIZE)
@@ -114,6 +115,7 @@ static char *FREE_LIST_BEGIN = NULL;
 #define FREE_LIST(size) ((char *)FREE_LIST_BEGIN + ((MIN(size, LARGE_BLOCK_SIZE) - MIN_BLOCK_SIZE) / ALIGNMENT) * MIN_BLOCK_SIZE)
 
 static int init_free_list();
+static void *split_to_small(void *bp, size_t size);
 static void remove_free_node(void *bp);
 static void insert_free_node(void *bp);
 static void *search_fit(size_t size);
@@ -144,6 +146,38 @@ static int init_free_list()
     }
 
     return 0;
+}
+
+/* split_to_small - split a large free block to several small blocks then insert to free list */
+static void *split_to_small(void *bp, size_t size)
+{
+    remove_free_node(bp);
+
+    /* backup */
+    void *first_bp = bp;
+    size_t prev_alloc = GET_PRE_ALLOC(HEADER_PTR(bp));
+
+    size_t rest_size = GET_SIZE(HEADER_PTR(bp));
+
+    while (rest_size >= MIN_BLOCK_SIZE + size)
+    {
+        PUT(HEADER_PTR(bp), PACK(size, 0));
+        PUT(FOOTER_PTR(bp), GET(HEADER_PTR(bp)));
+        insert_free_node(bp);
+        rest_size -= size;
+        bp = NEXT_BLOCK(bp);
+    }
+
+    /* last block */
+    PUT(HEADER_PTR(bp), PACK(rest_size, 0));
+    PUT(FOOTER_PTR(bp), GET(HEADER_PTR(bp)));
+    insert_free_node(bp);
+
+    /* restore first block */
+    PUT(HEADER_PTR(first_bp), PACK(GET_SIZE(HEADER_PTR(first_bp)), prev_alloc));
+    PUT(FOOTER_PTR(first_bp), GET(HEADER_PTR(first_bp)));
+
+    return first_bp;
 }
 
 /*
@@ -182,6 +216,9 @@ static void remove_free_node(void *bp)
  */
 static void *search_fit(size_t request_size)
 {
+    void *bp = NULL;
+
+    /* first hit for small block */
     if (request_size < LARGE_BLOCK_SIZE)
     {
         void *free_list = FREE_LIST(request_size);
@@ -189,27 +226,10 @@ static void *search_fit(size_t request_size)
 
         if (first_bp != free_list)
         {
-            return first_bp;
-        }
-    }
-
-    void *bp = NULL;
-
-    /* first hit for small block */
-    for (size_t size = request_size + MIN_BLOCK_SIZE; size < LARGE_BLOCK_SIZE; size += ALIGNMENT)
-    {
-        void *free_list = FREE_LIST(size);
-        void *first_bp = NEXT_FREE_PTR(free_list);
-
-        if (first_bp != free_list)
-        {
             bp = first_bp;
-            break;
         }
     }
-
-    /* try to find best fit block in large block list.  */
-    if (bp == NULL)
+    else
     {
         void *free_list = FREE_LIST(LARGE_BLOCK_SIZE);
         void *candidate = NULL;
@@ -628,12 +648,6 @@ int mm_init(void)
      */
     PUT(HEADER_PTR(NEXT_BLOCK(HEAD)), PACK(0, CUR_ALLOC | PREV_ALLOC));
 
-    // extend the empty heap
-    if (extend_heap(CHUNK_SIZE) == NULL)
-    {
-        return -1;
-    }
-
     return 0;
 }
 
@@ -658,18 +672,14 @@ void *mm_malloc(size_t size)
     /* Try to extend heap if no fit found */
     if ((bp = search_fit(size)) == NULL)
     {
-        void *epilogue = (char *)mem_heap_hi() + 1;
-
-        size_t extend_size = size;
-
-        if (!GET_PRE_ALLOC(HEADER_PTR(epilogue)))
+        if (size < LARGE_BLOCK_SIZE)
         {
-            extend_size = size - GET_SIZE(HEADER_PTR(PREV_BLOCK(epilogue)));
+            bp = extend_heap(size * SMALL_BLOCK_NUM);
+            bp = split_to_small(bp, size);
         }
-
-        if ((bp = extend_heap(extend_size)) == NULL)
+        else
         {
-            return NULL;
+            bp = extend_heap(size);
         }
     }
 
