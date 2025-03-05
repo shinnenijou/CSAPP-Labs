@@ -193,16 +193,22 @@ static void insert_free_node(void *bp)
 {
     size_t size = GET_SIZE(HEADER_PTR(bp));
     void *free_list = FREE_LIST(size);
+    void *insert_bp = NEXT_FREE_PTR(free_list);
 
-    void *old_first = NEXT_FREE_PTR(free_list);
+    while (insert_bp != free_list && bp > insert_bp)
+    {
+        insert_bp = NEXT_FREE_PTR(insert_bp);
+    }
+
+    void *prev_bp = PREV_FREE_PTR(insert_bp);
 
     /* link prev node and next node to bp */
-    PUT(HEADER_PTR(free_list) + NEXT_FREE_OFFSET, bp);
-    PUT(HEADER_PTR(old_first) + PREV_FREE_OFFSET, bp);
+    PUT(HEADER_PTR(prev_bp) + NEXT_FREE_OFFSET, bp);
+    PUT(HEADER_PTR(insert_bp) + PREV_FREE_OFFSET, bp);
 
     /* link bp to prev and next node */
-    PUT(HEADER_PTR(bp) + NEXT_FREE_OFFSET, old_first);
-    PUT(HEADER_PTR(bp) + PREV_FREE_OFFSET, free_list);
+    PUT(HEADER_PTR(bp) + NEXT_FREE_OFFSET, insert_bp);
+    PUT(HEADER_PTR(bp) + PREV_FREE_OFFSET, prev_bp);
 }
 
 /*
@@ -225,7 +231,8 @@ static void *search_fit(size_t request_size)
     void *bp = NULL;
 
     /* first hit for small block */
-    if (request_size < LARGE_BLOCK_SIZE)
+
+    for (size_t size = request_size; size < LARGE_BLOCK_SIZE; size += ALIGNMENT)
     {
         void *free_list = FREE_LIST(request_size);
         void *first_bp = NEXT_FREE_PTR(free_list);
@@ -233,31 +240,24 @@ static void *search_fit(size_t request_size)
         if (first_bp != free_list)
         {
             bp = first_bp;
+            break;
         }
     }
-    else
+
+    if (bp == NULL)
     {
         void *free_list = FREE_LIST(LARGE_BLOCK_SIZE);
-        void *candidate = NULL;
-        size_t candidate_size = 0;
 
         for (void *free_bp = NEXT_FREE_PTR(free_list); free_bp != free_list; free_bp = NEXT_FREE_PTR(free_bp))
         {
             size_t size = GET_SIZE(HEADER_PTR(free_bp));
 
-            if (size < request_size)
+            if (size >= request_size)
             {
-                continue;
-            }
-
-            if (size > candidate_size)
-            {
-                candidate = free_bp;
-                candidate_size = size;
+                bp = free_bp;
+                break;
             }
         }
-
-        bp = candidate;
     }
 
     return bp;
