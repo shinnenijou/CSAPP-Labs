@@ -8,9 +8,9 @@
 #define MAX_OBJECT_SIZE 102400
 
 static void serve(int fd);
-static size_t do_request(Request *request, char *response);
-static size_t do_get(Request *request, char *response);
-static void clienterror(int fd, char *cause, int errnum, char *shortmsg, char *longmsg);
+static int do_request(Request *request, char *response, size_t *len);
+static int do_get(Request *request, char *response, size_t *len);
+static void clienterror(int fd, char *cause, int errnum, char *longmsg);
 
 int main(int argc, char **argv)
 {
@@ -56,14 +56,7 @@ static void serve(int fd)
 
     if (!parse_request_line(buffer, request))
     {
-        clienterror(fd, buffer, BAD_REQUEST, "Bad Request", "Cannot parse this request.");
-        release_request(request);
-        return;
-    }
-
-    if (strcmp(request->method, "GET") != 0 && strcmp(request->method, "POST") != 0)
-    {
-        clienterror(fd, request->method, NOT_IMPLEMENTED, "Not Implmented", "Proxy does not implemented this method.");
+        clienterror(fd, buffer, BAD_REQUEST, "Cannot parse this request.");
         release_request(request);
         return;
     }
@@ -77,22 +70,23 @@ static void serve(int fd)
 
         if (!parse_header_line(buffer, request))
         {
-            clienterror(fd, buffer, BAD_REQUEST, "Bad Request", "Illegal header");
+            clienterror(fd, buffer, BAD_REQUEST, "Illegal header");
             release_request(request);
             return;
         }
     }
 
     char *response = Malloc(MAX_OBJECT_SIZE);
-    size_t response_size = do_request(request, response);
+    size_t size = 0;
+    int status = do_request(request, response, &size);
 
-    if (response_size == 0)
+    if (status != OK)
     {
-        clienterror(fd, "", INTERNAL_SERVER_ERROR, "Internal Server Error", "Proxy met something wrong.");
+        clienterror(fd, "", status, "Proxy met something wrong.");
     }
     else
     {
-        Rio_writen(fd, response, response_size);
+        Rio_writen(fd, response, size);
     }
 
     Free(response);
@@ -100,30 +94,61 @@ static void serve(int fd)
 }
 
 /* do_request - do the proxy request then return the response from end server */
-static size_t do_request(Request *request, char *response)
+static int do_request(Request *request, char *response, size_t *len)
 {
-    if (strcmp(request->method, "GET"))
+    if (strcmp(request->method, "GET") == 0)
     {
-        return do_get(request, response);
+        return do_get(request, response, len);
     }
 
-    return 0;
+    return NOT_IMPLEMENTED;
 }
 
-static size_t do_get(Request *request, char *response)
+static int do_get(Request *request, char *response, size_t *len)
 {
-    return 0;
+    char *buf = (char *)Malloc(MAX_OBJECT_SIZE);
+    size_t n;
+
+    if ((n = make_request_string(request, buf)) == 0)
+    {
+        Free(buf);
+        return INTERNAL_SERVER_ERROR;
+    }
+
+    int fd;
+    if ((fd = open_clientfd(request->host, request->port)) < 0)
+    {
+        return BAD_GATEWAY;
+    }
+
+    Rio_writen(fd, buf, n);
+
+    rio_t rio;
+    Rio_readinitb(&rio, fd);
+
+    size_t size = 0;
+
+    while ((n = Rio_readnb(&rio, response, MAX_OBJECT_SIZE)))
+    {
+        size += n;
+    }
+
+    *len = size;
+    Close(fd);
+    Free(buf);
+
+    return OK;
 }
 
 /*
  * clienterror - returns an error message to the client
  */
-static void clienterror(int fd, char *cause, int errnum, char *shortmsg, char *longmsg)
+static void clienterror(int fd, char *cause, int errnum, char *longmsg)
 {
     char buf[MAXLINE];
 
     /* Print the HTTP response headers */
-    sprintf(buf, "HTTP/1.0 %d %s\r\n", errnum, shortmsg);
+    sprintf(buf, "HTTP/1.0 %d %s\r\n", errnum, get_status_str(errnum));
     Rio_writen(fd, buf, strlen(buf));
     sprintf(buf, "Content-type: text/html\r\n\r\n");
     Rio_writen(fd, buf, strlen(buf));
@@ -133,7 +158,7 @@ static void clienterror(int fd, char *cause, int errnum, char *shortmsg, char *l
     Rio_writen(fd, buf, strlen(buf));
     sprintf(buf, "<body bgcolor=ffffff>\r\n");
     Rio_writen(fd, buf, strlen(buf));
-    sprintf(buf, "%d: %s\r\n", errnum, shortmsg);
+    sprintf(buf, "%d: %s\r\n", errnum, get_status_str(errnum));
     Rio_writen(fd, buf, strlen(buf));
     sprintf(buf, "<p>%s: %s\r\n", longmsg, cause);
     Rio_writen(fd, buf, strlen(buf));

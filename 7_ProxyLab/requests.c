@@ -42,7 +42,7 @@ Request *create_request()
 
     request->method[0] = '\0';
     request->host[0] = '\0';
-    request->port = 0;
+    request->port[0] = '\0';
     request->uri[0] = '\0';
     request->user_agent = user_agent_hdr;
     request->connection = connection_hdr;
@@ -70,7 +70,7 @@ void debug_print_request(Request *request)
 {
     printf("Method: %s\n", request->method);
     printf("Host: %s\n", request->host);
-    printf("Port: %d\n", request->port);
+    printf("Port: %s\n", request->port);
     printf("URI: %s\n", request->uri);
 
     printf("--- Predefined Headers ----\n");
@@ -88,7 +88,7 @@ void debug_print_request(Request *request)
 
 static char *strfind(char *str, size_t len, char delim)
 {
-    for (size_t i = 0; i < len; i++)
+    for (size_t i = 0; i < len && str[i] != '\0'; i++)
     {
         if (str[i] == delim)
         {
@@ -198,7 +198,7 @@ int parse_request_line(char *usrbuf, Request *request)
             return 0;
         }
 
-        request->port = port;
+        strcpy(request->port, sep + 1);
 
         if (slash)
         {
@@ -207,7 +207,7 @@ int parse_request_line(char *usrbuf, Request *request)
     }
     else
     {
-        request->port = HTTP_DEFAULT_PORT;
+        strcpy(request->port, HTTP_DEFAULT_PORT);
     }
 
     /* relative uri */
@@ -246,6 +246,11 @@ int parse_header_line(char *usrbuf, Request *request)
         return 1;
     }
 
+    if (strncasecmp(usrbuf, "Host:", sep - usrbuf) == 0)
+    {
+        return 1;
+    }
+
     size_t size = strlen(usrbuf);
 
     if (request->header_size == request->header_capacity)
@@ -259,4 +264,83 @@ int parse_header_line(char *usrbuf, Request *request)
     ++request->header_size;
 
     return 1;
+}
+
+size_t make_request_string(Request *request, char *usrbuf)
+{
+    int n;
+    char *bufptr = usrbuf;
+
+    if ((n = sprintf(bufptr, "%s %s HTTP/1.0\r\n", request->method, request->uri)) < 0)
+    {
+        return 0;
+    }
+
+    bufptr += n;
+
+    if ((n = sprintf(bufptr, "Host: %s\r\n", request->host)) < 0)
+    {
+        return 0;
+    }
+
+    bufptr += n;
+
+    if ((n = sprintf(bufptr, "%s", request->user_agent)) < 0)
+    {
+        return 0;
+    }
+
+    bufptr += n;
+
+    if ((n = sprintf(bufptr, "%s", request->connection)) < 0)
+    {
+        return 0;
+    }
+
+    bufptr += n;
+
+    if ((n = sprintf(bufptr, "%s", request->proxy_connection)) < 0)
+    {
+        return 0;
+    }
+
+    bufptr += n;
+
+    for (size_t i = 0; i < request->header_size; ++i)
+    {
+        if ((n = sprintf(bufptr, "%s", request->headers[i])) < 0)
+        {
+            return 0;
+        }
+
+        bufptr += n;
+    }
+
+    if ((n = sprintf(bufptr, "\r\n")) < 0)
+    {
+        return 0;
+    }
+
+    bufptr += n;
+
+    return bufptr - usrbuf;
+}
+
+const char *get_status_str(int status_code)
+{
+    switch (status_code)
+    {
+    case OK:
+        return "OK";
+    case BAD_REQUEST:
+        return "Bad Request";
+    case INTERNAL_SERVER_ERROR:
+        return "Internal Server Error";
+    case NOT_IMPLEMENTED:
+        return "Not Implemented";
+    case BAD_GATEWAY:
+        return "Bad Gateway";
+    default:
+        return "Unknown Error";
+    }
 }
