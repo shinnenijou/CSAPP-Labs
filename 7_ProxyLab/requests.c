@@ -20,12 +20,8 @@ int end_of_request(const char *buf, size_t len)
     return 0;
 }
 
-/* read_headers - read whole header part of HTTP request until continous /r/n */
-int read_headers(int fd, void *usrbuf, size_t maxlen)
+static int try_readn(int fd, void *usrbuf, size_t n)
 {
-    char *buf = usrbuf;
-
-    fd_set ready_set;
     fd_set read_set;
     FD_ZERO(&read_set);
     FD_SET(fd, &read_set);
@@ -34,53 +30,88 @@ int read_headers(int fd, void *usrbuf, size_t maxlen)
     timev.tv_sec = DEFAULT_TIMEOUT;
     timev.tv_usec = 0;
 
+    int nready = select(fd + 1, &read_set, NULL, NULL, &timev);
+
+    if (nready <= 0)
+    {
+        return -1;
+    }
+
+    int rc = read(fd, usrbuf, n);
+
+    if (rc < 0)
+    {
+        unix_error("read error");
+    }
+
+    return rc;
+}
+
+int request_readn(int fd, void *usrbuf, size_t maxlen)
+{
     size_t rest_size = maxlen;
+    char *buf = usrbuf;
 
     while (rest_size > 0)
     {
-        ready_set = read_set;
-        int old_errno = errno;
-        int nready = select(fd + 1, &ready_set, NULL, NULL, &timev);
+        int rc = try_readn(fd, buf, rest_size);
 
-        if (nready < 0)
-        {
-            if (errno != EINTR)
-            {
-                return -1;
-            }
-
-            errno = old_errno;
-        }
-        else if (nready == 0) /* time out */
+        /* timeout */
+        if (rc < 0)
         {
             return -1;
         }
-        else
+
+        /* EOF */
+        if (rc == 0)
         {
-            size_t rc = read(fd, buf, rest_size);
+            break;
+        }
 
-            if (rc < 0)
-            {
-                return -1;
-            }
-            else if (rc == 0)
-            { /* EOF */
-                break;
-            }
+        rest_size -= rc;
+        buf += rc;
+    }
 
-            rest_size -= rc;
+    *buf = '\0';
 
-            /* read successfully. check continous /r/n */
-            if (end_of_request(buf, rc))
-            {
-                break;
-            }
+    return maxlen - rest_size;
+}
 
-            buf += rc;
+/* read_headers - read whole header part of HTTP request until continous /r/n
+ * MAY contains body except headers
+ */
+int read_headers(int fd, void *usrbuf, size_t maxlen)
+{
+    size_t rest_size = maxlen;
+    char *buf = usrbuf;
+
+    while (rest_size > 0)
+    {
+        int rc = try_readn(fd, buf, rest_size);
+
+        /* timeout */
+        if (rc < 0)
+        {
+            return -1;
+        }
+
+        /* EOF */
+        if (rc == 0)
+        {
+            break;
+        }
+
+        rest_size -= rc;
+        buf += rc;
+
+        /* read successfully. check continous /r/n */
+        if (end_of_request(buf - rc, rc))
+        {
+            break;
         }
     }
 
-    *((char *)usrbuf + maxlen - rest_size) = '\0';
+    *buf = '\0';
 
     return maxlen - rest_size;
 }
@@ -345,7 +376,7 @@ int parse_request(void *usrbuf, Request *request)
         buffer[i] = '\0';
 
         /* end of request */
-        if (strncmp(buffer, "\r\n", 2) == 0)
+        if (buffer[0] == '\r' && buffer[1] == '\n')
         {
             break;
         }
@@ -368,10 +399,48 @@ int parse_request(void *usrbuf, Request *request)
         }
 
         buf += i;
-        i = 1;
+        i = 0;
     }
 
     return 1;
+}
+
+/* parse_response - parse response headers, return remaining bytes of body */
+int parse_response(void *usrbuf)
+{
+    char *buf = usrbuf;
+    int content_len = 0;
+
+    for (size_t i = 1; buf[i] != '\0'; ++i)
+    {
+        if (buf[i - 1] != '\r' || buf[i] != '\n')
+        {
+            continue;
+        }
+
+        /* end of headers */
+        if (i == 1)
+        {
+            buf += 2;
+            break;
+        }
+
+        if (strncasecmp(buf, "Content-length:", 15) == 0)
+        {
+            content_len = atoi(buf + 15);
+
+            if (content_len == 0)
+            {
+                return -1;
+            }
+        }
+
+        buf += i + 1;
+        i = 0;
+    }
+
+    size_t read_len = strlen(buf);
+    return content_len - read_len;
 }
 
 size_t make_request_string(Request *request, char *usrbuf)

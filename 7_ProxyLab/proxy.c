@@ -186,8 +186,29 @@ static int do_get(Request *request, char *response, size_t *len)
         {
             request_writen(fd, buf, n);
 
-            /* TODO deal with timeout */
-            if ((*len = Rio_readn(fd, response, MAX_OBJECT_SIZE)) < 0)
+            int rc = read_headers(fd, response, MAX_OBJECT_SIZE);
+            *len = rc;
+
+            if (rc > 0)
+            {
+                int rest_size = parse_response(response);
+
+                if (rest_size > 0)
+                {
+                    rc = request_readn(fd, (char *)response + rc, rest_size);
+                    *len += rc;
+
+                    if (rc < 0)
+                    {
+                        status = BAD_GATEWAY;
+                    }
+                }
+                else if (rest_size < 0)
+                {
+                    status = BAD_GATEWAY;
+                }
+            }
+            else
             {
                 status = BAD_GATEWAY;
             }
