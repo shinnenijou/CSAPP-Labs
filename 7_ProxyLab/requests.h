@@ -1,6 +1,7 @@
 #ifndef __REQUESTS_H__
 #define __REQUESTS_H__
 
+#include <time.h>
 #include "csapp.h"
 
 #define HTTP_DEFAULT_PORT "80"
@@ -13,8 +14,8 @@
 #define NOT_IMPLEMENTED 501
 #define BAD_GATEWAY 502
 
-#define HTTP_GET 0x1
-#define HTTP_POST 0x2
+/* Timer */
+#define DEFAULT_TIMEOUT 3
 
 typedef struct
 {
@@ -37,10 +38,11 @@ void release_request(Request *request);
 void debug_print_request(Request *request);
 int parse_request_line(char *usrbuf, Request *request);
 int parse_header_line(char *usrbuf, Request *request);
+int parse_request(void *usrbuf, Request *request);
 size_t make_request_string(Request *request, char *usrbuf);
 
-int read_request_line(rio_t *rp, void *usrbuf, size_t maxlen);
-int end_of_request(const char *line);
+int request_writen(int fd, void *usrbuf, size_t maxlen);
+int read_headers(int fd, void *usrbuf, size_t size_maxlen);
 
 const char *get_status_str(int status_code);
 

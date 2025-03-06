@@ -1,3 +1,4 @@
+#include <time.h>
 #include "requests.h"
 #include "csapp.h"
 
@@ -6,34 +7,88 @@ static const char *user_agent_hdr = "User-Agent: Mozilla/5.0 (X11; Linux x86_64;
 static const char *connection_hdr = "Connection: close\r\n";
 static const char *proxy_conn_hdr = "Proxy-Connection: close\r\n";
 
-int read_request_line(rio_t *rp, void *usrbuf, size_t maxlen)
+int end_of_request(const char *buf, size_t len)
 {
-    int total = 0;
-    int n = 0;
-    char *buf = (char *)usrbuf;
-
-    while ((n = rio_readlineb(rp, buf, maxlen)))
+    for (size_t i = len - 4; i < len; --i)
     {
-        if (n < 0)
+        if (strncmp(buf + i, "\r\n\r\n", 4) == 0)
         {
-            unix_error("read_request_line error");
-        }
-
-        total += n;
-        buf += n;
-
-        if (total > 1 && strcmp(buf - 2, "\r\n") == 0)
-        {
-            break;
+            return 1;
         }
     }
 
-    return total;
+    return 0;
 }
 
-int end_of_request(const char *line)
+/* read_headers - read whole header part of HTTP request until continous /r/n */
+int read_headers(int fd, void *usrbuf, size_t maxlen)
 {
-    return strcmp(line, "\r\n") == 0;
+    char *buf = usrbuf;
+
+    fd_set ready_set;
+    fd_set read_set;
+    FD_ZERO(&read_set);
+    FD_SET(fd, &read_set);
+
+    struct timeval timev;
+    timev.tv_sec = DEFAULT_TIMEOUT;
+    timev.tv_usec = 0;
+
+    size_t rest_size = maxlen;
+
+    while (rest_size > 0)
+    {
+        ready_set = read_set;
+        int old_errno = errno;
+        int nready = select(fd + 1, &ready_set, NULL, NULL, &timev);
+
+        if (nready < 0)
+        {
+            if (errno != EINTR)
+            {
+                return -1;
+            }
+
+            errno = old_errno;
+        }
+        else if (nready == 0) /* time out */
+        {
+            return -1;
+        }
+        else
+        {
+            size_t rc = read(fd, buf, rest_size);
+
+            if (rc < 0)
+            {
+                return -1;
+            }
+            else if (rc == 0)
+            { /* EOF */
+                break;
+            }
+
+            rest_size -= rc;
+
+            /* read successfully. check continous /r/n */
+            if (end_of_request(buf, rc))
+            {
+                break;
+            }
+
+            buf += rc;
+        }
+    }
+
+    *((char *)usrbuf + maxlen - rest_size) = '\0';
+
+    return maxlen - rest_size;
+}
+
+int request_writen(int fd, void *usrbuf, size_t maxlen)
+{
+    Rio_writen(fd, usrbuf, maxlen);
+    return maxlen;
 }
 
 Request *create_request()
@@ -262,6 +317,59 @@ int parse_header_line(char *usrbuf, Request *request)
     request->headers[request->header_size] = Malloc(size + 1);
     strcpy(request->headers[request->header_size], usrbuf);
     ++request->header_size;
+
+    return 1;
+}
+
+int parse_request(void *usrbuf, Request *request)
+{
+    char buffer[MAXLINE];
+    char *buf = usrbuf;
+
+    int first_line = 1;
+
+    /* split other headers */
+    for (size_t i = 1; buf[i] != '\0'; ++i)
+    {
+        if (buf[i - 1] != '\r' || buf[i] != '\n')
+        {
+            continue;
+        }
+
+        if (++i >= MAXLINE)
+        {
+            return 0;
+        }
+
+        strncpy(buffer, buf, i);
+        buffer[i] = '\0';
+
+        /* end of request */
+        if (strncmp(buffer, "\r\n", 2) == 0)
+        {
+            break;
+        }
+
+        if (first_line)
+        {
+            if (!parse_request_line(buffer, request))
+            {
+                return 0;
+            }
+
+            first_line = 0;
+        }
+        else
+        {
+            if (!parse_header_line(buffer, request))
+            {
+                return 0;
+            }
+        }
+
+        buf += i;
+        i = 1;
+    }
 
     return 1;
 }

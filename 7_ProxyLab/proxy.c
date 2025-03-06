@@ -13,6 +13,8 @@
 #define WORK_THREADS_NUM 4
 #define QUEUE_MAX_LEN 1024
 
+/* global states */
+
 /* terminate flag. server should wait for service completing after recerive signal to terminate */
 volatile int terminate = 0;
 
@@ -21,7 +23,7 @@ static void serve(int fd);
 static int do_request(Request *request, char *response, size_t *len);
 static int do_get(Request *request, char *response, size_t *len);
 static void clienterror(int fd, char *cause, int errnum, char *longmsg);
-static void sig_terminate(int sig);
+static void sigint_handler(int sig);
 
 int main(int argc, char **argv)
 {
@@ -38,8 +40,8 @@ int main(int argc, char **argv)
     }
 
     /* set signal handlers */
-    Signal(SIGINT, sig_terminate);  /* ctrl-c */
-    Signal(SIGTSTP, sig_terminate); /* ctrl-z */
+    Signal(SIGINT, sigint_handler);  /* ctrl-c */
+    Signal(SIGTSTP, sigint_handler); /* ctrl-z */
 
     /* init task queue */
     queue_t *queue = queue_create(QUEUE_MAX_LEN);
@@ -110,7 +112,6 @@ static void *thread(void *arg)
 
     while ((fd = queue_get(queue)) > 0)
     {
-        printf("serve %d by thread %ld\n", fd, Pthread_self());
         serve(fd);
         Close(fd);
     }
@@ -118,58 +119,46 @@ static void *thread(void *arg)
     return NULL;
 }
 
-/* TODO deal with timeout */
+/* TODO deal with SIGPIPE/EPIPE */
 static void serve(int fd)
 {
-    rio_t rio;
-    Rio_readinitb(&rio, fd);
-    char buffer[MAXLINE];
+    char *buffer = Malloc(MAX_OBJECT_SIZE);
 
-    // parse method & URI
-    if (!read_request_line(&rio, buffer, MAXLINE))
+    if (read_headers(fd, buffer, MAX_OBJECT_SIZE) > 0)
     {
-        return;
-    }
+        Request *request = create_request();
 
-    Request *request = create_request();
+        if (parse_request(buffer, request) > 0)
+        {
+            char *response = Malloc(MAX_OBJECT_SIZE);
 
-    if (!parse_request_line(buffer, request))
-    {
-        clienterror(fd, buffer, BAD_REQUEST, "Cannot parse this request.");
+            size_t size = 0;
+            int status = do_request(request, response, &size);
+
+            if (status != OK)
+            {
+                clienterror(fd, "", status, "Proxy met something wrong");
+            }
+            else
+            {
+                request_writen(fd, response, size);
+            }
+
+            Free(response);
+        }
+        else
+        {
+            clienterror(fd, "", BAD_REQUEST, "Cannot parse request");
+        }
+
         release_request(request);
-        return;
-    }
-
-    while (read_request_line(&rio, buffer, MAXLINE))
-    {
-        if (end_of_request(buffer))
-        {
-            break;
-        }
-
-        if (!parse_header_line(buffer, request))
-        {
-            clienterror(fd, buffer, BAD_REQUEST, "Illegal header");
-            release_request(request);
-            return;
-        }
-    }
-
-    char *response = Malloc(MAX_OBJECT_SIZE);
-    size_t size = 0;
-    int status = do_request(request, response, &size);
-
-    if (status != OK)
-    {
-        clienterror(fd, "", status, "Proxy met something wrong.");
     }
     else
     {
-        Rio_writen(fd, response, size);
+        clienterror(fd, "", BAD_GATEWAY, "");
     }
 
-    Free(response);
-    release_request(request);
+    Free(buffer);
 }
 
 /* do_request - do the proxy request then return the response from end server */
@@ -187,36 +176,37 @@ static int do_get(Request *request, char *response, size_t *len)
 {
     char *buf = (char *)Malloc(MAX_OBJECT_SIZE);
     size_t n;
+    int status = OK;
 
-    if ((n = make_request_string(request, buf)) == 0)
+    if ((n = make_request_string(request, buf)) > 0)
     {
-        Free(buf);
-        return INTERNAL_SERVER_ERROR;
+        int fd = 0;
+
+        if ((fd = open_clientfd(request->host, request->port)) > 0)
+        {
+            request_writen(fd, buf, n);
+
+            /* TODO deal with timeout */
+            if ((*len = Rio_readn(fd, response, MAX_OBJECT_SIZE)) < 0)
+            {
+                status = BAD_GATEWAY;
+            }
+
+            Close(fd);
+        }
+        else
+        {
+            status = BAD_GATEWAY;
+        }
+    }
+    else
+    {
+        status = INTERNAL_SERVER_ERROR;
     }
 
-    int fd;
-    if ((fd = open_clientfd(request->host, request->port)) < 0)
-    {
-        return BAD_GATEWAY;
-    }
-
-    Rio_writen(fd, buf, n);
-
-    rio_t rio;
-    Rio_readinitb(&rio, fd);
-
-    size_t size = 0;
-
-    while ((n = Rio_readnb(&rio, response, MAX_OBJECT_SIZE)))
-    {
-        size += n;
-    }
-
-    *len = size;
-    Close(fd);
     Free(buf);
 
-    return OK;
+    return status;
 }
 
 /*
@@ -228,24 +218,24 @@ static void clienterror(int fd, char *cause, int errnum, char *longmsg)
 
     /* Print the HTTP response headers */
     sprintf(buf, "HTTP/1.0 %d %s\r\n", errnum, get_status_str(errnum));
-    Rio_writen(fd, buf, strlen(buf));
+    request_writen(fd, buf, strlen(buf));
     sprintf(buf, "Content-type: text/html\r\n\r\n");
-    Rio_writen(fd, buf, strlen(buf));
+    request_writen(fd, buf, strlen(buf));
 
     /* Print the HTTP response body */
     sprintf(buf, "<html><title>Proxy Error</title>");
-    Rio_writen(fd, buf, strlen(buf));
+    request_writen(fd, buf, strlen(buf));
     sprintf(buf, "<body bgcolor=ffffff>\r\n");
-    Rio_writen(fd, buf, strlen(buf));
+    request_writen(fd, buf, strlen(buf));
     sprintf(buf, "%d: %s\r\n", errnum, get_status_str(errnum));
-    Rio_writen(fd, buf, strlen(buf));
+    request_writen(fd, buf, strlen(buf));
     sprintf(buf, "<p>%s: %s\r\n", longmsg, cause);
-    Rio_writen(fd, buf, strlen(buf));
+    request_writen(fd, buf, strlen(buf));
     sprintf(buf, "<hr><em>The Proxy</em>\r\n");
-    Rio_writen(fd, buf, strlen(buf));
+    request_writen(fd, buf, strlen(buf));
 }
 
-static void sig_terminate(int sig)
+static void sigint_handler(int sig)
 {
     sigset_t set, old_set;
     Sigfillset(&set);
@@ -253,7 +243,7 @@ static void sig_terminate(int sig)
 
     int old_errno = errno;
     char buffer[MAXLINE];
-    sprintf(buffer, "Received signal %d(%s), server will exit...\n", sig, strsignal(sig));
+    sprintf(buffer, "\nReceived signal %d(%s), server will exit...\n", sig, strsignal(sig));
     write(STDOUT_FILENO, buffer, strlen(buffer));
     terminate = 1;
     errno = old_errno;
