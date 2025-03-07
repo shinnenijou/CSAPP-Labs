@@ -16,6 +16,9 @@ csapp.o: csapp.c csapp.h
 proxy.o: proxy.c csapp.h
 	$(CC) $(CFLAGS) -c proxy.c
 
+tokens.o: tokens.c csapp.h
+	$(CC) $(CFLAGS) -c tokens.c
+
 requests.o: requests.c csapp.h
 	$(CC) $(CFLAGS) -c requests.c
 
@@ -25,8 +28,8 @@ queue.o: queue.c csapp.h
 cache.o: cache.c csapp.h
 	$(CC) $(CFLAGS) -c cache.c
 
-proxy: proxy.o csapp.o requests.o queue.o cache.o
-	$(CC) $(CFLAGS) proxy.o csapp.o requests.o queue.o cache.o -o proxy $(LDFLAGS)
+proxy: proxy.o csapp.o tokens.o requests.o queue.o cache.o 
+	$(CC) $(CFLAGS) proxy.o csapp.o tokens.o requests.o queue.o cache.o -o proxy $(LDFLAGS)
 
 # Creates a tarball in ../proxylab-handin.tar that you can then
 # hand in. DO NOT MODIFY THIS!
