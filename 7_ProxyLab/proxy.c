@@ -138,8 +138,6 @@ static void serve(int fd)
 
         if (request)
         {
-            // debug_print_request(request);
-
             int status = do_request(request, fd);
 
             if (status != OK)

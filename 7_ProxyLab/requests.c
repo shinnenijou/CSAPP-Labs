@@ -133,8 +133,8 @@ static int parse_request_line(char *usrbuf, size_t len, Request *request)
         memcpy(request->host, host_tokens[0].token, host_tokens[0].size);
         request->host[host_tokens[0].size] = '\0';
 
-        memcpy(request->host, host_tokens[1].token, host_tokens[1].size);
-        request->host[host_tokens[1].size] = '\0';
+        memcpy(request->port, host_tokens[1].token, host_tokens[1].size);
+        request->port[host_tokens[1].size] = '\0';
     }
 
     return 1;
@@ -267,16 +267,21 @@ Request *parse_request(void *usrbuf)
 
 int write_request(int fd, Request *request)
 {
-    char buffer[MAXLINE];
+    char buffer[MAXLINE + 100];
 
-    sprintf(buffer, "%s %s HTTP/1.0", request->method, request->uri);
+    if (rio_writen(fd, request->method, strlen(request->method)) < 0)
+    {
+        return -1;
+    }
+
+    sprintf(buffer, " %s HTTP/1.0\r\n", request->uri);
 
     if (rio_writen(fd, buffer, strlen(buffer)) < 0)
     {
         return -1;
     }
 
-    sprintf(buffer, "Host: %s", request->host);
+    sprintf(buffer, "Host: %s\r\n", request->host);
 
     if (rio_writen(fd, buffer, strlen(buffer)) < 0)
     {
@@ -300,7 +305,9 @@ int write_request(int fd, Request *request)
 
     for (size_t i = 0; i < request->header_size; ++i)
     {
-        if (rio_writen(fd, request->headers[i], strlen(request->headers[i])) < 0)
+        sprintf(buffer, "%s\r\n", request->headers[i]);
+
+        if (rio_writen(fd, buffer, strlen(buffer)) < 0)
         {
             return -1;
         }
