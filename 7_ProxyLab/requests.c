@@ -116,10 +116,12 @@ int read_headers(int fd, void *usrbuf, size_t maxlen)
     return maxlen - rest_size;
 }
 
+/*
+ * request_writen -
+ */
 int request_writen(int fd, void *usrbuf, size_t maxlen)
 {
-    Rio_writen(fd, usrbuf, maxlen);
-    return maxlen;
+    return rio_writen(fd, usrbuf, maxlen);
 }
 
 Request *create_request()

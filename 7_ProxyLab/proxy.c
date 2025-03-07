@@ -24,6 +24,7 @@ static int do_request(Request *request, char *response, size_t *len);
 static int do_get(Request *request, char *response, size_t *len);
 static void clienterror(int fd, char *cause, int errnum, char *longmsg);
 static void sigint_handler(int sig);
+static void sigpipe_handler(int sig);
 
 int main(int argc, char **argv)
 {
@@ -42,6 +43,7 @@ int main(int argc, char **argv)
     /* set signal handlers */
     Signal(SIGINT, sigint_handler);  /* ctrl-c */
     Signal(SIGTSTP, sigint_handler); /* ctrl-z */
+    Signal(SIGPIPE, sigpipe_handler);
 
     /* init task queue */
     queue_t *queue = queue_create(QUEUE_MAX_LEN);
@@ -270,4 +272,9 @@ static void sigint_handler(int sig)
     errno = old_errno;
 
     Sigprocmask(SIG_SETMASK, &old_set, NULL);
+}
+
+/* actual ignore SIGPIPE but will interrupt system call */
+static void sigpipe_handler(int sig)
+{
 }
