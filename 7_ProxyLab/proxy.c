@@ -132,7 +132,10 @@ static void serve(int fd)
 {
     char *buffer = NULL;
 
-    if (read_headers(fd, &buffer) > 0)
+    rio_t rio;
+    rio_readinitb(&rio, fd);
+
+    if (read_headers(&rio, &buffer) > 0)
     {
         Request *request = parse_request(buffer);
 
@@ -198,7 +201,10 @@ static int do_get(Request *request, int clientfd)
 
     char *resp_headers = NULL;
 
-    if (read_headers(fd, &resp_headers) < 0)
+    rio_t rio;
+    rio_readinitb(&rio, fd);
+
+    if (read_headers(&rio, &resp_headers) < 0)
     {
         return BAD_GATEWAY;
     }
@@ -210,7 +216,7 @@ static int do_get(Request *request, int clientfd)
         return BAD_GATEWAY;
     }
 
-    if (rio_readn(fd, resp->content, resp->content_length) < 0)
+    if (rio_readnb(&rio, resp->content, resp->content_length) < 0)
     {
         Free(resp);
         return BAD_GATEWAY;

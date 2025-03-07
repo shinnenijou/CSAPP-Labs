@@ -55,7 +55,7 @@ void release_response(Response *response);
 void debug_print_response(Response *response);
 
 /* I/O wrappers */
-int read_headers(int fd, char **buf);
+int read_headers(rio_t *rp, char **buf);
 int write_request(int fd, Request *request);
 
 /* Misc */

@@ -12,18 +12,15 @@ static const char *proxy_conn_hdr = "Proxy-Connection: close";
  * read_headers - read whole header part of HTTP request until continous /r/n
  * user responsibility to release memory
  */
-int read_headers(int fd, char **buf)
+int read_headers(rio_t *rp, char **buf)
 {
     size_t capacity = MAXLINE;
     size_t readn = 0;
     char *buffer = (char *)Malloc(capacity);
 
-    rio_t rio;
-    rio_readinitb(&rio, fd);
-
     while (1)
     {
-        int rc = rio_readlineb(&rio, buffer + readn, capacity - readn);
+        int rc = rio_readlineb(rp, buffer + readn, capacity - readn);
 
         if (rc < 0)
         {
@@ -408,7 +405,7 @@ static int parse_response_header(char *usrbuf, size_t len, Response *response)
     {
         int length = atoi(tokens[1].token);
 
-        if (length == 0)
+        if (length < 0)
         {
             return 0;
         }
