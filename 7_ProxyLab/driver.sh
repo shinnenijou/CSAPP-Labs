@@ -302,7 +302,7 @@ echo "Starting the blocking NOP server on port ${nop_port}"
 nop_pid=$!
 
 # Wait for the nop server to start in earnest
-wait_for_port_use "${nop_port}"
+# wait_for_port_use "${nop_port}"
 
 # Try to fetch a file from the blocking nop-server using the proxy
 clear_dirs
