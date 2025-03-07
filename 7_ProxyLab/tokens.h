@@ -13,5 +13,6 @@ typedef struct
 } token_t;
 
 int split_line(token_t tokens[], size_t max_token, char *usrbuf, size_t maxlen, char delim);
+void rstrip_token(token_t *token);
 
 #endif

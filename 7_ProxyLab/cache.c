@@ -1,19 +1,20 @@
 #include "csapp.h"
 #include "cache.h"
+#include "requests.h"
 
-static char *build_cache_obj(const cache_t *cache)
+static int build_cache_obj(const cache_t *cache, char **buf)
 {
     char buffer[MAXLINE + MAXLINE + MAXLINE];
-    size_t body_size = strlen(cache->content);
 
-    sprintf(buffer, "HTTP/1.0 200 OK\r\nServer: %sContent-length: %ld\r\n%s\r\n", cache->host, cache->size, cache->content_type);
+    sprintf(buffer, "HTTP/1.0 200 OK\r\nServer: %s\r\nContent-length: %ld\r\n%s\r\n\r\n", cache->host, cache->size, cache->content_type);
     size_t header_size = strlen(buffer);
 
-    char *obj = (char *)Malloc(header_size + body_size + 1);
+    char *obj = (char *)Malloc(header_size + cache->size);
     memcpy(obj, buffer, header_size);
-    memcpy(obj + header_size, cache->content, body_size);
-    obj[header_size + body_size] = '\0';
-    return obj;
+    memcpy(obj + header_size, cache->content, cache->size);
+
+    *buf = obj;
+    return header_size + cache->size;
 }
 
 cache_pool_t *create_cache_pool(size_t max_size, size_t max_obj)
@@ -60,11 +61,11 @@ void release_cache_pool(cache_pool_t *pool)
  * read_cache - use cached object content to build a complete HTTP response
  * user responsibility to free memory
  */
-char *read_cache(cache_pool_t *pool, const char *host, const char *port, const char *uri)
+int read_cache(cache_pool_t *pool, Request *request, char **buf)
 {
-    if (!pool || !host || !port || !uri)
+    if (!pool || !request || !buf)
     {
-        return NULL;
+        return -1;
     }
 
     P(&pool->mutex);
@@ -77,26 +78,26 @@ char *read_cache(cache_pool_t *pool, const char *host, const char *port, const c
     V(&pool->mutex);
 
     /* search cache */
-    char *obj = NULL;
+    int size = -1;
 
     for (cache_t *p = pool->dummy->next; p != pool->dummy; p = p->next)
     {
-        if (strcmp(host, p->host) != 0)
+        if (strcmp(request->host, p->host) != 0)
         {
             continue;
         }
 
-        if (strcmp(port, p->port) != 0)
+        if (strcmp(request->port, p->port) != 0)
         {
             continue;
         }
 
-        if (strcmp(uri, p->uri) != 0)
+        if (strcmp(request->uri, p->uri) != 0)
         {
             continue;
         }
 
-        obj = build_cache_obj(p);
+        size = build_cache_obj(p, buf);
         break;
     }
 
@@ -109,48 +110,46 @@ char *read_cache(cache_pool_t *pool, const char *host, const char *port, const c
     }
     V(&pool->mutex);
 
-    return obj;
+    return size;
 }
 
-void write_cache(cache_pool_t *pool, const char *host, const char *port, const char *uri, const char *content_type, const char *content)
+void write_cache(cache_pool_t *pool, Request *request, Response *response)
 {
-    if (!pool || !host || !port || !uri || !content)
+    if (!pool || !request || !response)
     {
         return;
     }
 
-    size_t size = strlen(content);
-
-    if (size > pool->max_obj)
+    if (response->content_length > pool->max_obj)
     {
         return;
     }
 
-    char *new_content = Malloc(size + 1);
-    strncpy(new_content, content, size + 1);
+    char *new_content = Malloc(response->content_length);
+    memcpy(new_content, response->content, response->content_length);
 
     cache_t *new_cache = Malloc(sizeof(cache_t));
-    strncpy(new_cache->host, host, MAXLINE);
-    strncpy(new_cache->port, port, MAXLINE);
-    strncpy(new_cache->uri, uri, MAXLINE);
-    strncpy(new_cache->content_type, content_type, MAXLINE);
+    strncpy(new_cache->host, request->host, MAXLINE);
+    strncpy(new_cache->port, request->port, MAXLINE);
+    strncpy(new_cache->uri, request->uri, MAXLINE);
+    strncpy(new_cache->content_type, response->content_type, MAXLINE);
     new_cache->content = new_content;
-    new_cache->size = size;
+    new_cache->size = response->content_length;
 
     P(&pool->write_mutex);
 
     /* delete old cache if exists */
     for (cache_t *p = pool->dummy->next; p != pool->dummy; p = p->next)
     {
-        if (strcmp(p->host, host) != 0)
+        if (strcmp(p->host, request->host) != 0)
         {
             continue;
         }
-        if (strcmp(p->port, port) != 0)
+        if (strcmp(p->port, request->port) != 0)
         {
             continue;
         }
-        if (strcmp(p->uri, uri) != 0)
+        if (strcmp(p->uri, request->uri) != 0)
         {
             continue;
         }
@@ -164,7 +163,7 @@ void write_cache(cache_pool_t *pool, const char *host, const char *port, const c
     }
 
     /* delete old cache if size exceeds limit */
-    while (size + pool->total_size > pool->max_size)
+    while (response->content_length + pool->total_size > pool->max_size)
     {
         cache_t *last = pool->dummy->prev;
         pool->total_size -= last->size;

@@ -43,3 +43,20 @@ int split_line(token_t tokens[], size_t max_token, char *usrbuf, size_t maxlen, 
 
     return cnt;
 }
+
+void rstrip_token(token_t *token)
+{
+    if (!token)
+    {
+        return;
+    }
+
+    for (size_t i = token->size - 1; i < token->size; --i)
+    {
+        if (token->token[i] != '\r' && token->token[i] != '\n')
+        {
+            token->size = i + 1;
+            return;
+        }
+    }
+}

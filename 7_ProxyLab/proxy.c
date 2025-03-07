@@ -176,12 +176,13 @@ static int do_request(Request *request, int clientfd)
 static int do_get(Request *request, int clientfd)
 {
     /* try to get content from cache */
-    char *content = read_cache(cache_pool, request->host, request->port, request->uri);
+    char *cache = NULL;
+    int size = read_cache(cache_pool, request, &cache);
 
-    if (content)
+    if (size > 0)
     {
-        rio_writen(clientfd, content, strlen(content));
-        Free(content);
+        rio_writen(clientfd, cache, size);
+        Free(cache);
         return OK;
     }
 
@@ -221,7 +222,7 @@ static int do_get(Request *request, int clientfd)
     Close(fd);
 
     /* write to cahce */
-    write_cache(cache_pool, request->host, request->port, request->uri, resp->content_type, resp->content);
+    write_cache(cache_pool, request, resp);
 
     /* write content to proxy client */
     rio_writen(clientfd, resp_headers, strlen(resp_headers));

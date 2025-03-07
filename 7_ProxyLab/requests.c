@@ -239,10 +239,10 @@ Request *parse_request(void *usrbuf)
         return NULL;
     }
 
-    /* tokens will not contains \n, add it manually */
+    /* tokens will contain \r, remove is manually*/
     for (size_t i = 0; i < line_cnt; ++i)
     {
-        lines[i].token[lines[i].size++] = '\n';
+        rstrip_token(lines + i);
     }
 
     Request *request = create_request();
@@ -417,6 +417,12 @@ Response *parse_response(void *usrbuf)
     if (line_cnt < 1)
     {
         return NULL;
+    }
+
+    /* tokens will contain \r, remove is manually*/
+    for (size_t i = 0; i < line_cnt; ++i)
+    {
+        rstrip_token(lines + i);
     }
 
     Response *resp = create_response();
