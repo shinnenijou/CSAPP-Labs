@@ -4,9 +4,9 @@
 #include "tokens.h"
 
 /* You won't lose style points for including this long line in your code */
-static const char *user_agent_hdr = "User-Agent: Mozilla/5.0 (X11; Linux x86_64; rv:10.0.3) Gecko/20120305 Firefox/10.0.3\r\n";
-static const char *connection_hdr = "Connection: close\r\n";
-static const char *proxy_conn_hdr = "Proxy-Connection: close\r\n";
+static const char *user_agent_hdr = "User-Agent: Mozilla/5.0 (X11; Linux x86_64; rv:10.0.3) Gecko/20120305 Firefox/10.0.3";
+static const char *connection_hdr = "Connection: close";
+static const char *proxy_conn_hdr = "Proxy-Connection: close";
 
 /*
  * read_headers - read whole header part of HTTP request until continous /r/n
@@ -166,22 +166,15 @@ static int parse_request_header(char *usrbuf, size_t len, Request *request)
         return 1;
     }
 
-    if (strncasecmp(tokens[0].token, "Host:", tokens[0].size) == 0)
-    {
-        return 1;
-    }
-
-    size_t size = strlen(usrbuf);
-
     if (request->header_size == request->header_capacity)
     {
         request->header_capacity += request->header_capacity;
         request->headers = Realloc(request->headers, request->header_capacity * sizeof(char *));
     }
 
-    request->headers[request->header_size] = Malloc(size + 1);
-    memcpy(request->headers[request->header_size], usrbuf, size);
-    request->headers[request->header_size][size] = '\0';
+    request->headers[request->header_size] = Malloc(len + 1);
+    memcpy(request->headers[request->header_size], usrbuf, len);
+    request->headers[request->header_size][len] = '\0';
     ++request->header_size;
 
     return 1;
@@ -269,7 +262,9 @@ int write_request(int fd, Request *request)
 {
     char buffer[MAXLINE + 100];
 
-    if (rio_writen(fd, request->method, strlen(request->method)) < 0)
+    sprintf(buffer, "%s", request->method);
+
+    if (rio_writen(fd, buffer, strlen(buffer)) < 0)
     {
         return -1;
     }
@@ -281,24 +276,23 @@ int write_request(int fd, Request *request)
         return -1;
     }
 
-    sprintf(buffer, "Host: %s\r\n", request->host);
+    sprintf(buffer, "%s\r\n", request->user_agent);
 
     if (rio_writen(fd, buffer, strlen(buffer)) < 0)
     {
         return -1;
     }
 
-    if (rio_writen(fd, request->user_agent, strlen(request->user_agent)) < 0)
+    sprintf(buffer, "%s\r\n", request->connection);
+
+    if (rio_writen(fd, buffer, strlen(buffer)) < 0)
     {
         return -1;
     }
 
-    if (rio_writen(fd, request->connection, strlen(request->connection)) < 0)
-    {
-        return -1;
-    }
+    sprintf(buffer, "%s\r\n", request->proxy_connection);
 
-    if (rio_writen(fd, request->proxy_connection, strlen(request->proxy_connection)) < 0)
+    if (rio_writen(fd, buffer, strlen(buffer)) < 0)
     {
         return -1;
     }
@@ -313,6 +307,11 @@ int write_request(int fd, Request *request)
         }
     }
 
+    if (rio_writen(fd, HTTP_REQUEST_END, strlen(HTTP_REQUEST_END)) < 0)
+    {
+        return -1;
+    }
+
     return 0;
 }
 
@@ -324,15 +323,15 @@ void debug_print_request(Request *request)
     printf("URI: %s\n", request->uri);
 
     printf("--- Predefined Headers ----\n");
-    printf("%s", request->connection);
-    printf("%s", request->proxy_connection);
-    printf("%s", request->user_agent);
+    printf("%s\n", request->connection);
+    printf("%s\n", request->proxy_connection);
+    printf("%s\n", request->user_agent);
 
     printf("--- User Request Headers ----\n");
 
     for (size_t i = 0; i < request->header_size; ++i)
     {
-        printf("%s", request->headers[i]);
+        printf("%s\n", request->headers[i]);
     }
 }
 
@@ -358,11 +357,11 @@ void release_response(Response *response)
 
 static int parse_status_line(char *usrbuf, size_t len, Response *response)
 {
-    token_t tokens[4];
-    int token_cnt = split_line(tokens, 4, usrbuf, len, ' ');
+    token_t tokens[MAXLINE];
+    int token_cnt = split_line(tokens, MAXLINE, usrbuf, len, ' ');
 
     /* illegal response */
-    if (token_cnt != 3)
+    if (token_cnt < 3)
     {
         return 0;
     }
@@ -373,6 +372,17 @@ static int parse_status_line(char *usrbuf, size_t len, Response *response)
     {
         return 0;
     }
+
+    char *p = response->status;
+
+    for (size_t i = 2; i < token_cnt; ++i)
+    {
+        memcpy(p, tokens[i].token, tokens[i].size);
+        p[tokens[i].size] = ' ';
+        p += tokens[i].size + 1;
+    }
+
+    *(p - 1) = '\0';
 
     return 1;
 }
@@ -458,4 +468,6 @@ void debug_print_response(Response *response)
     printf("Content-length: %ld\n", response->content_length);
     printf("Status_code: %d\n", response->status_code);
     printf("Content-type: %s\n", response->content_type);
+    printf("Status: %s\n", response->status);
+    printf("Ststus code: %d\n", response->status_code);
 }

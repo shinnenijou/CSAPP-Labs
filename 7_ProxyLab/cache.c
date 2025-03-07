@@ -6,15 +6,15 @@ static int build_cache_obj(const cache_t *cache, char **buf)
 {
     char buffer[MAXLINE + MAXLINE + MAXLINE];
 
-    sprintf(buffer, "HTTP/1.0 200 OK\r\nServer: %s\r\nContent-length: %ld\r\n%s\r\n\r\n", cache->host, cache->size, cache->content_type);
+    sprintf(buffer, "HTTP/1.0 200 OK\r\nServer: %s\r\nContent-length: %ld\r\n%s\r\n\r\n", cache->host, cache->content_length, cache->content_type);
     size_t header_size = strlen(buffer);
 
-    char *obj = (char *)Malloc(header_size + cache->size);
+    char *obj = (char *)Malloc(header_size + cache->content_length);
     memcpy(obj, buffer, header_size);
-    memcpy(obj + header_size, cache->content, cache->size);
+    memcpy(obj + header_size, cache->content, cache->content_length);
 
     *buf = obj;
-    return header_size + cache->size;
+    return header_size + cache->content_length;
 }
 
 cache_pool_t *create_cache_pool(size_t max_size, size_t max_obj)
@@ -134,7 +134,8 @@ void write_cache(cache_pool_t *pool, Request *request, Response *response)
     strncpy(new_cache->uri, request->uri, MAXLINE);
     strncpy(new_cache->content_type, response->content_type, MAXLINE);
     new_cache->content = new_content;
-    new_cache->size = response->content_length;
+    new_cache->content_length = response->content_length;
+    new_cache->status_code = response->status_code;
 
     P(&pool->write_mutex);
 
@@ -154,7 +155,7 @@ void write_cache(cache_pool_t *pool, Request *request, Response *response)
             continue;
         }
 
-        pool->total_size -= p->size;
+        pool->total_size -= p->content_length;
         p->prev->next = p->next;
         p->next->prev = p->prev;
         Free(p->content);
@@ -166,7 +167,7 @@ void write_cache(cache_pool_t *pool, Request *request, Response *response)
     while (response->content_length + pool->total_size > pool->max_size)
     {
         cache_t *last = pool->dummy->prev;
-        pool->total_size -= last->size;
+        pool->total_size -= last->content_length;
         last->prev->next = last->next;
         last->next->prev = last->prev;
         Free(last->content);

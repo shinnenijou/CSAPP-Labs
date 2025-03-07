@@ -10,8 +10,10 @@ typedef struct _cache
     char port[MAXLINE];
     char uri[MAXLINE];
     char content_type[MAXLINE];
+    char status[MAXLINE];
+    int status_code;
     char *content;
-    size_t size;
+    size_t content_length;
     struct _cache *prev;
     struct _cache *next;
 } cache_t;

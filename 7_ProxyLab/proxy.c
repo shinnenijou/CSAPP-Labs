@@ -220,11 +220,18 @@ static int do_get(Request *request, int clientfd)
     Close(fd);
 
     /* write to cahce */
-    write_cache(cache_pool, request, resp);
+    if (resp->content)
+    {
+        write_cache(cache_pool, request, resp);
+    }
 
     /* write content to proxy client */
     rio_writen(clientfd, resp_headers, strlen(resp_headers));
-    rio_writen(clientfd, resp->content, resp->content_length);
+
+    if (resp->content)
+    {
+        rio_writen(clientfd, resp->content, resp->content_length);
+    }
 
     return OK;
 }

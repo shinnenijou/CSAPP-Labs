@@ -6,6 +6,7 @@
 
 #define HTTP_DEFAULT_PORT "80"
 #define HTTP_DEFAULT_URI "/"
+#define HTTP_REQUEST_END "\r\n"
 
 /* status codes */
 #define OK 200
@@ -45,6 +46,7 @@ typedef struct
     int status_code;
     char *content;
     char content_type[MAXLINE];
+    char status[MAXLINE];
 } Response;
 
 /* Response struct helper */
