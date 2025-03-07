@@ -467,4 +467,5 @@ void debug_print_response(Response *response)
     printf("Content-type: %s\n", response->content_type);
     printf("Status: %s\n", response->status);
     printf("Ststus code: %d\n", response->status_code);
+    printf("Content: %s\n", response->content);
 }

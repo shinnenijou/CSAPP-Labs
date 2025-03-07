@@ -4,10 +4,34 @@
 
 static int build_cache_obj(const cache_t *cache, char **buf)
 {
-    char buffer[MAXLINE + MAXLINE + MAXLINE];
+    char buffer[MAXLINE];
+    char *p = buffer;
 
-    sprintf(buffer, "HTTP/1.0 200 OK\r\nServer: %s\r\nContent-length: %ld\r\n%s\r\n\r\n", cache->host, cache->content_length, cache->content_type);
-    size_t header_size = strlen(buffer);
+    size_t header_size = 0;
+
+    sprintf(p, "HTTP/1.0 %d %s\r\n", cache->status_code, cache->status);
+    header_size += strlen(p);
+    p = buffer + header_size;
+
+    sprintf(p, "Server: %s\r\n", cache->host);
+    header_size += strlen(p);
+    p = buffer + header_size;
+
+    sprintf(p, "Content-length: %ld\r\n", cache->content_length);
+    header_size += strlen(p);
+    p = buffer + header_size;
+
+    if (strlen(cache->content_type) != 0)
+    {
+        sprintf(p, "%s\r\n", cache->content_type);
+        header_size += strlen(p);
+        p = buffer + header_size;
+    }
+
+    /* end of headers */
+    sprintf(p, "\r\n");
+    header_size += strlen(p);
+    p = buffer + header_size;
 
     char *obj = (char *)Malloc(header_size + cache->content_length);
     memcpy(obj, buffer, header_size);
@@ -133,6 +157,7 @@ void write_cache(cache_pool_t *pool, Request *request, Response *response)
     strncpy(new_cache->port, request->port, MAXLINE);
     strncpy(new_cache->uri, request->uri, MAXLINE);
     strncpy(new_cache->content_type, response->content_type, MAXLINE);
+    strncpy(new_cache->status, response->status, MAXLINE);
     new_cache->content = new_content;
     new_cache->content_length = response->content_length;
     new_cache->status_code = response->status_code;
