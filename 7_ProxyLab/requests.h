@@ -34,7 +34,6 @@ typedef struct
     size_t header_size;
 } Request;
 
-Request *create_request();
 void release_request(Request *request);
 
 /* Request struct helper */
@@ -48,8 +47,8 @@ int parse_response(void *usrbuf, void *content_type);
 size_t make_request_string(Request *request, char *usrbuf);
 
 int request_writen(int fd, void *usrbuf, size_t maxlen);
-int request_readn(int fd, void *usrbuf, size_t maxlen);
-int read_headers(int fd, void *usrbuf, size_t maxlen);
+
+int read_headers(int fd, char **buf);
 
 const char *get_status_str(int status_code);
 

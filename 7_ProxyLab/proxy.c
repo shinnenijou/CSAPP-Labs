@@ -128,18 +128,17 @@ static void *thread(void *arg)
     return NULL;
 }
 
-/* TODO deal with SIGPIPE/EPIPE */
 static void serve(int fd)
 {
-    char *buffer = Malloc(MAX_OBJECT_SIZE);
+    char *buffer = NULL;
 
-    if (read_headers(fd, buffer, MAX_OBJECT_SIZE) > 0)
+    if (read_headers(fd, &buffer) > 0)
     {
         Request *request = parse_request(buffer);
 
         if (request)
         {
-            debug_print_request(request);
+            // debug_print_request(request);
 
             // char *response = NULL;
 
@@ -211,7 +210,7 @@ static int do_get(Request *request, char **response, size_t *len)
             *response = Malloc(MAX_OBJECT_SIZE + MAX_OBJECT_SIZE);
             char content_type[MAXLINE];
 
-            int rc = read_headers(fd, *response, MAX_OBJECT_SIZE + MAX_OBJECT_SIZE);
+            int rc = read_headers(fd, *response);
             *len = rc;
 
             if (rc > 0)
@@ -220,7 +219,7 @@ static int do_get(Request *request, char **response, size_t *len)
 
                 if (rest_size > 0)
                 {
-                    rc = request_readn(fd, (char *)*response + rc, rest_size);
+                    rc = rio_readn(fd, (char *)*response + rc, rest_size);
                     *len += rc;
                     rest_size -= rc;
 

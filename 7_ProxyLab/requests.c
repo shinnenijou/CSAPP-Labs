@@ -8,113 +8,53 @@ static const char *user_agent_hdr = "User-Agent: Mozilla/5.0 (X11; Linux x86_64;
 static const char *connection_hdr = "Connection: close\r\n";
 static const char *proxy_conn_hdr = "Proxy-Connection: close\r\n";
 
-int end_of_request(const char *buf, size_t len)
-{
-    for (size_t i = len - 4; i < len; --i)
-    {
-        if (strncmp(buf + i, "\r\n\r\n", 4) == 0)
-        {
-            return 1;
-        }
-    }
-
-    return 0;
-}
-
-static int try_readn(int fd, void *usrbuf, size_t n)
-{
-    fd_set read_set;
-    FD_ZERO(&read_set);
-    FD_SET(fd, &read_set);
-
-    struct timeval timev;
-    timev.tv_sec = DEFAULT_TIMEOUT;
-    timev.tv_usec = 0;
-
-    int nready = select(fd + 1, &read_set, NULL, NULL, &timev);
-
-    if (nready <= 0)
-    {
-        return -1;
-    }
-
-    int rc = read(fd, usrbuf, n);
-
-    if (rc < 0)
-    {
-        unix_error("read error");
-    }
-
-    return rc;
-}
-
-int request_readn(int fd, void *usrbuf, size_t maxlen)
-{
-    size_t rest_size = maxlen;
-    char *buf = usrbuf;
-
-    while (rest_size > 0)
-    {
-        int rc = try_readn(fd, buf, rest_size);
-
-        /* timeout */
-        if (rc < 0)
-        {
-            return -1;
-        }
-
-        /* EOF */
-        if (rc == 0)
-        {
-            break;
-        }
-
-        rest_size -= rc;
-        buf += rc;
-    }
-
-    *buf = '\0';
-
-    return maxlen - rest_size;
-}
-
-/* read_headers - read whole header part of HTTP request until continous /r/n
- * MAY contains body except headers
+/*
+ * read_headers - read whole header part of HTTP request until continous /r/n
+ * user responsibility to release memory
  */
-int read_headers(int fd, void *usrbuf, size_t maxlen)
+int read_headers(int fd, char **buf)
 {
-    size_t rest_size = maxlen;
-    char *buf = usrbuf;
+    size_t capacity = MAXLINE;
+    size_t readn = 0;
+    char *buffer = (char *)Malloc(capacity);
 
-    while (rest_size > 0)
+    rio_t rio;
+    rio_readinitb(&rio, fd);
+
+    while (1)
     {
-        int rc = try_readn(fd, buf, rest_size);
+        int rc = rio_readlineb(&rio, buffer + readn, capacity - readn);
 
-        /* timeout */
         if (rc < 0)
         {
+            Free(buffer);
             return -1;
         }
-
-        /* EOF */
-        if (rc == 0)
+        else if (rc == 0) /* EOF */
         {
             break;
         }
 
-        rest_size -= rc;
-        buf += rc;
+        readn += rc;
 
-        /* read successfully. check continous /r/n */
-        if (end_of_request(buf - rc, rc))
+        /* check request end continous /r/n */
+        if (strncmp(buffer + readn - rc, "\r\n", 2) == 0)
         {
             break;
+        }
+
+        /* buffer ran out(too long requeast) */
+        if (readn >= capacity)
+        {
+            Free(buffer);
+            return -1;
         }
     }
 
-    *buf = '\0';
+    buffer[readn] = '\0';
+    *buf = buffer;
 
-    return maxlen - rest_size;
+    return readn;
 }
 
 /*
@@ -123,61 +63,6 @@ int read_headers(int fd, void *usrbuf, size_t maxlen)
 int request_writen(int fd, void *usrbuf, size_t maxlen)
 {
     return rio_writen(fd, usrbuf, maxlen);
-}
-
-Request *create_request()
-{
-    Request *request = Malloc(sizeof(Request));
-
-    request->method[0] = '\0';
-    request->host[0] = '\0';
-    request->port[0] = '\0';
-    request->uri[0] = '\0';
-    request->user_agent = user_agent_hdr;
-    request->connection = connection_hdr;
-    request->proxy_connection = proxy_conn_hdr;
-
-    request->header_capacity = 8;
-    request->header_size = 0;
-    request->headers = Malloc(request->header_capacity * sizeof(char *));
-
-    return request;
-}
-
-void release_request(Request *request)
-{
-    if (!request)
-    {
-        return;
-    }
-
-    for (size_t i = 0; i < request->header_size; ++i)
-    {
-        free(request->headers[i]);
-    }
-
-    free(request->headers);
-    free(request);
-}
-
-void debug_print_request(Request *request)
-{
-    printf("Method: %s\n", request->method);
-    printf("Host: %s\n", request->host);
-    printf("Port: %s\n", request->port);
-    printf("URI: %s\n", request->uri);
-
-    printf("--- Predefined Headers ----\n");
-    printf("%s", request->connection);
-    printf("%s", request->proxy_connection);
-    printf("%s", request->user_agent);
-
-    printf("--- User Request Headers ----\n");
-
-    for (size_t i = 0; i < request->header_size; ++i)
-    {
-        printf("%s", request->headers[i]);
-    }
 }
 
 /* parse_response - parse response headers, return remaining bytes of body */
@@ -415,6 +300,41 @@ static int parse_header_line(char *usrbuf, size_t len, Request *request)
     return 1;
 }
 
+static Request *create_request()
+{
+    Request *request = Malloc(sizeof(Request));
+
+    request->method[0] = '\0';
+    request->host[0] = '\0';
+    request->port[0] = '\0';
+    request->uri[0] = '\0';
+    request->user_agent = user_agent_hdr;
+    request->connection = connection_hdr;
+    request->proxy_connection = proxy_conn_hdr;
+
+    request->header_capacity = 8;
+    request->header_size = 0;
+    request->headers = Malloc(request->header_capacity * sizeof(char *));
+
+    return request;
+}
+
+void release_request(Request *request)
+{
+    if (!request)
+    {
+        return;
+    }
+
+    for (size_t i = 0; i < request->header_size; ++i)
+    {
+        free(request->headers[i]);
+    }
+
+    free(request->headers);
+    free(request);
+}
+
 /* parse_request - parse a null-terminated string as a HTTP request */
 Request *parse_request(void *usrbuf)
 {
@@ -456,4 +376,24 @@ Request *parse_request(void *usrbuf)
     }
 
     return request;
+}
+
+void debug_print_request(Request *request)
+{
+    printf("Method: %s\n", request->method);
+    printf("Host: %s\n", request->host);
+    printf("Port: %s\n", request->port);
+    printf("URI: %s\n", request->uri);
+
+    printf("--- Predefined Headers ----\n");
+    printf("%s", request->connection);
+    printf("%s", request->proxy_connection);
+    printf("%s", request->user_agent);
+
+    printf("--- User Request Headers ----\n");
+
+    for (size_t i = 0; i < request->header_size; ++i)
+    {
+        printf("%s", request->headers[i]);
+    }
 }
