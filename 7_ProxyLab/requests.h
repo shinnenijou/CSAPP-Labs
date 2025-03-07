@@ -39,7 +39,7 @@ void debug_print_request(Request *request);
 int parse_request_line(char *usrbuf, Request *request);
 int parse_header_line(char *usrbuf, Request *request);
 int parse_request(void *usrbuf, Request *request);
-int parse_response(void *usrbuf);
+int parse_response(void *usrbuf, void *content_type);
 size_t make_request_string(Request *request, char *usrbuf);
 
 int request_writen(int fd, void *usrbuf, size_t maxlen);

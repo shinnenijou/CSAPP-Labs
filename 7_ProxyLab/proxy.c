@@ -4,6 +4,7 @@
 #include "csapp.h"
 #include "requests.h"
 #include "queue.h"
+#include "cache.h"
 
 /* Recommended max cache and object sizes */
 #define MAX_CACHE_SIZE 1049000
@@ -14,15 +15,17 @@
 #define QUEUE_MAX_LEN 1024
 
 /* global states */
+cache_pool_t *cache_pool = NULL;
 
 /* terminate flag. server should wait for service completing after recerive signal to terminate */
 volatile int terminate = 0;
 
 static void *thread(void *arg);
 static void serve(int fd);
-static int do_request(Request *request, char *response, size_t *len);
-static int do_get(Request *request, char *response, size_t *len);
+static int do_request(Request *request, char **response, size_t *len);
+static int do_get(Request *request, char **response, size_t *len);
 static void clienterror(int fd, char *cause, int errnum, char *longmsg);
+
 static void sigint_handler(int sig);
 static void sigpipe_handler(int sig);
 
@@ -44,6 +47,9 @@ int main(int argc, char **argv)
     Signal(SIGINT, sigint_handler);  /* ctrl-c */
     Signal(SIGTSTP, sigint_handler); /* ctrl-z */
     Signal(SIGPIPE, sigpipe_handler);
+
+    /* init cache pool */
+    cache_pool = create_cache_pool(MAX_CACHE_SIZE, MAX_OBJECT_SIZE);
 
     /* init task queue */
     queue_t *queue = queue_create(QUEUE_MAX_LEN);
@@ -103,6 +109,7 @@ int main(int argc, char **argv)
     }
 
     queue_free(queue);
+    release_cache_pool(cache_pool);
 
     return 0;
 }
@@ -132,10 +139,10 @@ static void serve(int fd)
 
         if (parse_request(buffer, request) > 0)
         {
-            char *response = Malloc(MAX_OBJECT_SIZE);
+            char *response = NULL;
 
             size_t size = 0;
-            int status = do_request(request, response, &size);
+            int status = do_request(request, &response, &size);
 
             if (status != OK)
             {
@@ -164,7 +171,7 @@ static void serve(int fd)
 }
 
 /* do_request - do the proxy request then return the response from end server */
-static int do_request(Request *request, char *response, size_t *len)
+static int do_request(Request *request, char **response, size_t *len)
 {
     if (strcmp(request->method, "GET") == 0)
     {
@@ -174,8 +181,18 @@ static int do_request(Request *request, char *response, size_t *len)
     return NOT_IMPLEMENTED;
 }
 
-static int do_get(Request *request, char *response, size_t *len)
+static int do_get(Request *request, char **response, size_t *len)
 {
+    /* try to get content from cache */
+    char *content = read_cache(cache_pool, request->host, request->port, request->uri);
+
+    if (content)
+    {
+        *len = strlen(content);
+        *response = content;
+        return OK;
+    }
+
     char *buf = (char *)Malloc(MAX_OBJECT_SIZE);
     size_t n;
     int status = OK;
@@ -188,17 +205,22 @@ static int do_get(Request *request, char *response, size_t *len)
         {
             request_writen(fd, buf, n);
 
-            int rc = read_headers(fd, response, MAX_OBJECT_SIZE);
+            /* for headers and body */
+            *response = Malloc(MAX_OBJECT_SIZE + MAX_OBJECT_SIZE);
+            char content_type[MAXLINE];
+
+            int rc = read_headers(fd, *response, MAX_OBJECT_SIZE + MAX_OBJECT_SIZE);
             *len = rc;
 
             if (rc > 0)
             {
-                int rest_size = parse_response(response);
+                int rest_size = parse_response(*response, content_type);
 
                 if (rest_size > 0)
                 {
-                    rc = request_readn(fd, (char *)response + rc, rest_size);
+                    rc = request_readn(fd, (char *)*response + rc, rest_size);
                     *len += rc;
+                    rest_size -= rc;
 
                     if (rc < 0)
                     {
@@ -208,6 +230,11 @@ static int do_get(Request *request, char *response, size_t *len)
                 else if (rest_size < 0)
                 {
                     status = BAD_GATEWAY;
+                }
+
+                if (rest_size == 0)
+                {
+                    write_cache(cache_pool, request->host, request->port, request->uri, content_type, *response);
                 }
             }
             else

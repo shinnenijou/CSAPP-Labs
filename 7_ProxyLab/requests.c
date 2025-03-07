@@ -408,7 +408,7 @@ int parse_request(void *usrbuf, Request *request)
 }
 
 /* parse_response - parse response headers, return remaining bytes of body */
-int parse_response(void *usrbuf)
+int parse_response(void *usrbuf, void *content_type)
 {
     char *buf = usrbuf;
     int content_len = 0;
@@ -435,6 +435,13 @@ int parse_response(void *usrbuf)
             {
                 return -1;
             }
+        }
+        else if (strncasecmp(buf, "Content-type:", 13) == 0)
+        {
+            char c = buf[i + 1];
+            buf[i + 1] = '\0';
+            strcpy(content_type, buf);
+            buf[i + 1] = c;
         }
 
         buf += i + 1;
