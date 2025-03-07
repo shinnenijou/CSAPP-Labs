@@ -135,25 +135,27 @@ static void serve(int fd)
 
     if (read_headers(fd, buffer, MAX_OBJECT_SIZE) > 0)
     {
-        Request *request = create_request();
+        Request *request = parse_request(buffer);
 
-        if (parse_request(buffer, request) > 0)
+        if (request)
         {
-            char *response = NULL;
+            debug_print_request(request);
 
-            size_t size = 0;
-            int status = do_request(request, &response, &size);
+            // char *response = NULL;
 
-            if (status != OK)
-            {
-                clienterror(fd, "", status, "Proxy met something wrong");
-            }
-            else
-            {
-                request_writen(fd, response, size);
-            }
+            // size_t size = 0;
+            // int status = do_request(request, &response, &size);
 
-            Free(response);
+            // if (status != OK)
+            // {
+            //     clienterror(fd, "", status, "Proxy met something wrong");
+            // }
+            // else
+            // {
+            //     request_writen(fd, response, size);
+            // }
+
+            // Free(response);
         }
         else
         {

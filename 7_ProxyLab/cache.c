@@ -180,7 +180,5 @@ void write_cache(cache_pool_t *pool, const char *host, const char *port, const c
     new_cache->next = head;
     new_cache->prev = pool->dummy;
 
-    printf("Wrote to cache.\n");
-
     V(&pool->write_mutex);
 }

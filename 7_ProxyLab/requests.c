@@ -1,6 +1,7 @@
 #include <time.h>
 #include "requests.h"
 #include "csapp.h"
+#include "tokens.h"
 
 /* You won't lose style points for including this long line in your code */
 static const char *user_agent_hdr = "User-Agent: Mozilla/5.0 (X11; Linux x86_64; rv:10.0.3) Gecko/20120305 Firefox/10.0.3\r\n";
@@ -145,6 +146,11 @@ Request *create_request()
 
 void release_request(Request *request)
 {
+    if (!request)
+    {
+        return;
+    }
+
     for (size_t i = 0; i < request->header_size; ++i)
     {
         free(request->headers[i]);
@@ -172,239 +178,6 @@ void debug_print_request(Request *request)
     {
         printf("%s", request->headers[i]);
     }
-}
-
-static char *strfind(char *str, size_t len, char delim)
-{
-    for (size_t i = 0; i < len && str[i] != '\0'; i++)
-    {
-        if (str[i] == delim)
-        {
-            return &str[i];
-        }
-    }
-
-    return NULL;
-}
-
-int parse_request_line(char *usrbuf, Request *request)
-{
-    if (!usrbuf || !request)
-    {
-        return 0;
-    }
-
-    size_t size;
-    char *sep;
-
-    /* parse method */
-    size = strlen(usrbuf);
-    sep = strfind(usrbuf, size, ' ');
-
-    if (sep == NULL)
-    {
-        return 0;
-    }
-
-    *sep = '\0';
-    strcpy(request->method, usrbuf);
-    *sep = ' ';
-
-    /* parse uri */
-    size -= sep - usrbuf;
-    usrbuf = ++sep;
-    sep = strfind(usrbuf, size, ' ');
-
-    if (sep == NULL)
-    {
-        return 0;
-    }
-
-    char uri[MAXLINE];
-    char *urip;
-
-    *sep = '\0';
-    strcpy(uri, usrbuf);
-    *sep = ' ';
-
-    /* The absoluteURI form is only allowed when the request is being made to a proxy.  */
-
-    /* scheme */
-    urip = uri;
-
-    if ((sep = strfind(urip, MAXLINE, ':')) == NULL)
-    {
-        return 0;
-    }
-
-    *sep = '\0';
-    strcpy(request->scheme, urip);
-    *sep = ':';
-
-    /* host and port */
-    urip = sep + 3;
-    sep = strfind(urip, MAXLINE - (urip - uri), ':');
-
-    /* host */
-    if (sep)
-    {
-        *sep = '\0';
-        strcpy(request->host, urip);
-        *sep = ':';
-    }
-    else
-    {
-        char *slash = strfind(urip, MAXLINE - (urip - uri), '/');
-
-        if (slash)
-        {
-            *slash = '\0';
-        }
-
-        strcpy(request->host, urip);
-
-        if (slash)
-        {
-            *slash = '/';
-        }
-    }
-
-    /* port */
-    if (sep)
-    {
-        char *slash = strfind(sep, MAXLINE - (sep - uri), '/');
-
-        if (slash)
-        {
-            *slash = '\0';
-        }
-
-        int port = atoi(sep + 1);
-
-        if (port == 0)
-        {
-            return 0;
-        }
-
-        strcpy(request->port, sep + 1);
-
-        if (slash)
-        {
-            *slash = '/';
-        }
-    }
-    else
-    {
-        strcpy(request->port, HTTP_DEFAULT_PORT);
-    }
-
-    /* relative uri */
-    sep = strfind(urip, MAXLINE - (urip - uri), '/');
-    strcpy(request->uri, sep ? sep : HTTP_DEFAULT_URI);
-
-    return 1;
-}
-
-int parse_header_line(char *usrbuf, Request *request)
-{
-    if (!usrbuf || !request)
-    {
-        return 0;
-    }
-
-    char *sep = strfind(usrbuf, MAXLINE, ':');
-
-    if (!sep)
-    {
-        return 0;
-    }
-
-    if (strncasecmp(usrbuf, user_agent_hdr, sep - usrbuf) == 0)
-    {
-        return 1;
-    }
-
-    if (strncasecmp(usrbuf, connection_hdr, sep - usrbuf) == 0)
-    {
-        return 1;
-    }
-
-    if (strncasecmp(usrbuf, proxy_conn_hdr, sep - usrbuf) == 0)
-    {
-        return 1;
-    }
-
-    if (strncasecmp(usrbuf, "Host:", sep - usrbuf) == 0)
-    {
-        return 1;
-    }
-
-    size_t size = strlen(usrbuf);
-
-    if (request->header_size == request->header_capacity)
-    {
-        request->header_capacity += request->header_capacity;
-        request->headers = Realloc(request->headers, request->header_capacity * sizeof(char *));
-    }
-
-    request->headers[request->header_size] = Malloc(size + 1);
-    strcpy(request->headers[request->header_size], usrbuf);
-    ++request->header_size;
-
-    return 1;
-}
-
-int parse_request(void *usrbuf, Request *request)
-{
-    char buffer[MAXLINE];
-    char *buf = usrbuf;
-
-    int first_line = 1;
-
-    /* split other headers */
-    for (size_t i = 1; buf[i] != '\0'; ++i)
-    {
-        if (buf[i - 1] != '\r' || buf[i] != '\n')
-        {
-            continue;
-        }
-
-        if (++i >= MAXLINE)
-        {
-            return 0;
-        }
-
-        strncpy(buffer, buf, i);
-        buffer[i] = '\0';
-
-        /* end of request */
-        if (buffer[0] == '\r' && buffer[1] == '\n')
-        {
-            break;
-        }
-
-        if (first_line)
-        {
-            if (!parse_request_line(buffer, request))
-            {
-                return 0;
-            }
-
-            first_line = 0;
-        }
-        else
-        {
-            if (!parse_header_line(buffer, request))
-            {
-                return 0;
-            }
-        }
-
-        buf += i;
-        i = 0;
-    }
-
-    return 1;
 }
 
 /* parse_response - parse response headers, return remaining bytes of body */
@@ -529,4 +302,158 @@ const char *get_status_str(int status_code)
     default:
         return "Unknown Error";
     }
+}
+
+static int parse_request_line(char *usrbuf, size_t len, Request *request)
+{
+    token_t tokens[4];
+
+    /* should not exceed or less than 3 tokens in HTTP request line */
+    if (split_line(tokens, 4, usrbuf, len, ' ') != 3)
+    {
+        return 0;
+    }
+
+    /* method */
+    memcpy(request->method, tokens[0].token, tokens[0].size);
+    request->method[tokens[0].size] = '\0';
+
+    /* split uri token again and discard other tokens */
+    token_t uri_tokens[MAXLINE];
+    size_t num = split_line(uri_tokens, MAXLINE, tokens[1].token, tokens[1].size, '/');
+
+    if (num < 2)
+    {
+        return 0;
+    }
+
+    /* relative uri  */
+    size_t uri_len = 0;
+
+    for (size_t i = 2; i < num; ++i)
+    {
+        request->uri[uri_len++] = '/';
+        memcpy(request->uri + uri_len, uri_tokens[i].token, uri_tokens[i].size);
+        uri_len += uri_tokens[i].size;
+        request->uri[uri_len] = '\0';
+    }
+
+    /* no specified relative uri */
+    if (uri_len == 0)
+    {
+        request->uri[0] = '/';
+    }
+
+    token_t host_tokens[3];
+
+    /* host and port, split by / then the second token is host and port */
+    if (split_line(host_tokens, 3, uri_tokens[1].token, uri_tokens[1].size, ':') < 2)
+    {
+        size_t l = strlen(HTTP_DEFAULT_PORT);
+        memcpy(request->port, HTTP_DEFAULT_PORT, l);
+        request->port[l] = '\0';
+
+        memcpy(request->host, host_tokens[0].token, host_tokens[0].size);
+        request->host[host_tokens[0].size] = '\0';
+    }
+    else
+    {
+        memcpy(request->host, host_tokens[0].token, host_tokens[0].size);
+        request->host[host_tokens[0].size] = '\0';
+
+        memcpy(request->host, host_tokens[1].token, host_tokens[1].size);
+        request->host[host_tokens[1].size] = '\0';
+    }
+
+    return 1;
+}
+
+static int parse_header_line(char *usrbuf, size_t len, Request *request)
+{
+    token_t tokens[3];
+    int num = split_line(tokens, 3, usrbuf, len, ':');
+
+    /* illegal header */
+    if (num < 2)
+    {
+        return 1;
+    }
+
+    if (strncasecmp(tokens[0].token, user_agent_hdr, tokens[0].size) == 0)
+    {
+        return 1;
+    }
+
+    if (strncasecmp(tokens[0].token, connection_hdr, tokens[0].size) == 0)
+    {
+        return 1;
+    }
+
+    if (strncasecmp(tokens[0].token, proxy_conn_hdr, tokens[0].size) == 0)
+    {
+        return 1;
+    }
+
+    if (strncasecmp(tokens[0].token, "Host:", tokens[0].size) == 0)
+    {
+        return 1;
+    }
+
+    size_t size = strlen(usrbuf);
+
+    if (request->header_size == request->header_capacity)
+    {
+        request->header_capacity += request->header_capacity;
+        request->headers = Realloc(request->headers, request->header_capacity * sizeof(char *));
+    }
+
+    request->headers[request->header_size] = Malloc(size + 1);
+    memcpy(request->headers[request->header_size], usrbuf, size);
+    request->headers[request->header_size][size] = '\0';
+    ++request->header_size;
+
+    return 1;
+}
+
+/* parse_request - parse a null-terminated string as a HTTP request */
+Request *parse_request(void *usrbuf)
+{
+    if (usrbuf == NULL)
+    {
+        return NULL;
+    }
+
+    size_t len = strlen(usrbuf);
+    token_t lines[MAXLINE];
+    int line_cnt = split_line(lines, MAXLINE, usrbuf, len, '\n');
+
+    if (line_cnt == 0)
+    {
+        return NULL;
+    }
+
+    /* tokens will not contains \n, add it manually */
+    for (size_t i = 0; i < line_cnt; ++i)
+    {
+        lines[i].token[lines[i].size++] = '\n';
+    }
+
+    Request *request = create_request();
+
+    if (!parse_request_line(lines[0].token, lines[0].size, request))
+    {
+        release_request(request);
+        return NULL;
+    }
+
+    for (size_t i = 1; i < line_cnt; ++i)
+    {
+        if (!parse_header_line(lines[i].token, lines[i].size, request))
+        {
+            release_request(request);
+            return NULL;
+        }
+    }
+
+    return request;
 }
