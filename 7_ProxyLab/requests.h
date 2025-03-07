@@ -17,8 +17,7 @@
 /* Timer */
 #define DEFAULT_TIMEOUT 3
 
-/* REFACTORED */
-
+/* Request */
 typedef struct
 {
     char method[MAXLINE];
@@ -34,22 +33,30 @@ typedef struct
     size_t header_size;
 } Request;
 
-void release_request(Request *request);
-
 /* Request struct helper */
+void release_request(Request *request);
 Request *parse_request(void *usrbuf);
-
-/*========================*/
-
 void debug_print_request(Request *request);
 
-int parse_response(void *usrbuf, void *content_type);
-size_t make_request_string(Request *request, char *usrbuf);
+/* Response */
+typedef struct
+{
+    size_t content_length;
+    int status_code;
+    char *content;
+    char content_type[MAXLINE];
+} Response;
 
-int request_writen(int fd, void *usrbuf, size_t maxlen);
+/* Response struct helper */
+Response *parse_response(void *usrbuf);
+void release_response(Response *response);
+void debug_print_response(Response *response);
 
+/* I/O wrappers */
 int read_headers(int fd, char **buf);
+int write_request(int fd, Request *request);
 
+/* Misc */
 const char *get_status_str(int status_code);
 
 #endif

@@ -22,8 +22,8 @@ volatile int terminate = 0;
 
 static void *thread(void *arg);
 static void serve(int fd);
-static int do_request(Request *request, char **response, size_t *len);
-static int do_get(Request *request, char **response, size_t *len);
+static int do_request(Request *request, int clientfd);
+static int do_get(Request *request, int clientfd);
 static void clienterror(int fd, char *cause, int errnum, char *longmsg);
 
 static void sigint_handler(int sig);
@@ -140,21 +140,12 @@ static void serve(int fd)
         {
             // debug_print_request(request);
 
-            // char *response = NULL;
+            int status = do_request(request, fd);
 
-            // size_t size = 0;
-            // int status = do_request(request, &response, &size);
-
-            // if (status != OK)
-            // {
-            //     clienterror(fd, "", status, "Proxy met something wrong");
-            // }
-            // else
-            // {
-            //     request_writen(fd, response, size);
-            // }
-
-            // Free(response);
+            if (status != OK)
+            {
+                clienterror(fd, "", status, "Proxy met something wrong");
+            }
         }
         else
         {
@@ -172,92 +163,71 @@ static void serve(int fd)
 }
 
 /* do_request - do the proxy request then return the response from end server */
-static int do_request(Request *request, char **response, size_t *len)
+static int do_request(Request *request, int clientfd)
 {
     if (strcmp(request->method, "GET") == 0)
     {
-        return do_get(request, response, len);
+        return do_get(request, clientfd);
     }
 
     return NOT_IMPLEMENTED;
 }
 
-static int do_get(Request *request, char **response, size_t *len)
+static int do_get(Request *request, int clientfd)
 {
     /* try to get content from cache */
     char *content = read_cache(cache_pool, request->host, request->port, request->uri);
 
     if (content)
     {
-        *len = strlen(content);
-        *response = content;
+        rio_writen(clientfd, content, strlen(content));
+        Free(content);
         return OK;
     }
 
-    char *buf = (char *)Malloc(MAX_OBJECT_SIZE);
-    size_t n;
-    int status = OK;
+    int fd = 0;
 
-    if ((n = make_request_string(request, buf)) > 0)
+    if ((fd = open_clientfd(request->host, request->port)) < 0)
     {
-        int fd = 0;
-
-        if ((fd = open_clientfd(request->host, request->port)) > 0)
-        {
-            request_writen(fd, buf, n);
-
-            /* for headers and body */
-            *response = Malloc(MAX_OBJECT_SIZE + MAX_OBJECT_SIZE);
-            char content_type[MAXLINE];
-
-            int rc = read_headers(fd, *response);
-            *len = rc;
-
-            if (rc > 0)
-            {
-                int rest_size = parse_response(*response, content_type);
-
-                if (rest_size > 0)
-                {
-                    rc = rio_readn(fd, (char *)*response + rc, rest_size);
-                    *len += rc;
-                    rest_size -= rc;
-
-                    if (rc < 0)
-                    {
-                        status = BAD_GATEWAY;
-                    }
-                }
-                else if (rest_size < 0)
-                {
-                    status = BAD_GATEWAY;
-                }
-
-                if (rest_size == 0)
-                {
-                    write_cache(cache_pool, request->host, request->port, request->uri, content_type, *response);
-                }
-            }
-            else
-            {
-                status = BAD_GATEWAY;
-            }
-
-            Close(fd);
-        }
-        else
-        {
-            status = BAD_GATEWAY;
-        }
-    }
-    else
-    {
-        status = INTERNAL_SERVER_ERROR;
+        return BAD_GATEWAY;
     }
 
-    Free(buf);
+    if (write_request(fd, request) < 0)
+    {
+        return BAD_GATEWAY;
+    }
 
-    return status;
+    char *resp_headers = NULL;
+
+    if (read_headers(fd, &resp_headers) < 0)
+    {
+        return BAD_GATEWAY;
+    }
+
+    Response *resp = parse_response(resp_headers);
+
+    if (resp == NULL)
+    {
+        return BAD_GATEWAY;
+    }
+
+    if (rio_readn(fd, resp->content, resp->content_length) < 0)
+    {
+        Free(resp);
+        return BAD_GATEWAY;
+    }
+
+    /* close connection with content server */
+    Close(fd);
+
+    /* write to cahce */
+    write_cache(cache_pool, request->host, request->port, request->uri, resp->content_type, resp->content);
+
+    /* write content to proxy client */
+    rio_writen(clientfd, resp_headers, strlen(resp_headers));
+    rio_writen(clientfd, resp->content, resp->content_length);
+
+    return OK;
 }
 
 /*
@@ -269,21 +239,21 @@ static void clienterror(int fd, char *cause, int errnum, char *longmsg)
 
     /* Print the HTTP response headers */
     sprintf(buf, "HTTP/1.0 %d %s\r\n", errnum, get_status_str(errnum));
-    request_writen(fd, buf, strlen(buf));
+    rio_writen(fd, buf, strlen(buf));
     sprintf(buf, "Content-type: text/html\r\n\r\n");
-    request_writen(fd, buf, strlen(buf));
+    rio_writen(fd, buf, strlen(buf));
 
     /* Print the HTTP response body */
     sprintf(buf, "<html><title>Proxy Error</title>");
-    request_writen(fd, buf, strlen(buf));
+    rio_writen(fd, buf, strlen(buf));
     sprintf(buf, "<body bgcolor=ffffff>\r\n");
-    request_writen(fd, buf, strlen(buf));
+    rio_writen(fd, buf, strlen(buf));
     sprintf(buf, "%d: %s\r\n", errnum, get_status_str(errnum));
-    request_writen(fd, buf, strlen(buf));
+    rio_writen(fd, buf, strlen(buf));
     sprintf(buf, "<p>%s: %s\r\n", longmsg, cause);
-    request_writen(fd, buf, strlen(buf));
+    rio_writen(fd, buf, strlen(buf));
     sprintf(buf, "<hr><em>The Proxy</em>\r\n");
-    request_writen(fd, buf, strlen(buf));
+    rio_writen(fd, buf, strlen(buf));
 }
 
 static void sigint_handler(int sig)

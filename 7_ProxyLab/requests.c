@@ -57,119 +57,6 @@ int read_headers(int fd, char **buf)
     return readn;
 }
 
-/*
- * request_writen -
- */
-int request_writen(int fd, void *usrbuf, size_t maxlen)
-{
-    return rio_writen(fd, usrbuf, maxlen);
-}
-
-/* parse_response - parse response headers, return remaining bytes of body */
-int parse_response(void *usrbuf, void *content_type)
-{
-    char *buf = usrbuf;
-    int content_len = 0;
-
-    for (size_t i = 1; buf[i] != '\0'; ++i)
-    {
-        if (buf[i - 1] != '\r' || buf[i] != '\n')
-        {
-            continue;
-        }
-
-        /* end of headers */
-        if (i == 1)
-        {
-            buf += 2;
-            break;
-        }
-
-        if (strncasecmp(buf, "Content-length:", 15) == 0)
-        {
-            content_len = atoi(buf + 15);
-
-            if (content_len == 0)
-            {
-                return -1;
-            }
-        }
-        else if (strncasecmp(buf, "Content-type:", 13) == 0)
-        {
-            char c = buf[i + 1];
-            buf[i + 1] = '\0';
-            strcpy(content_type, buf);
-            buf[i + 1] = c;
-        }
-
-        buf += i + 1;
-        i = 0;
-    }
-
-    size_t read_len = strlen(buf);
-    return content_len - read_len;
-}
-
-size_t make_request_string(Request *request, char *usrbuf)
-{
-    int n;
-    char *bufptr = usrbuf;
-
-    if ((n = sprintf(bufptr, "%s %s HTTP/1.0\r\n", request->method, request->uri)) < 0)
-    {
-        return 0;
-    }
-
-    bufptr += n;
-
-    if ((n = sprintf(bufptr, "Host: %s\r\n", request->host)) < 0)
-    {
-        return 0;
-    }
-
-    bufptr += n;
-
-    if ((n = sprintf(bufptr, "%s", request->user_agent)) < 0)
-    {
-        return 0;
-    }
-
-    bufptr += n;
-
-    if ((n = sprintf(bufptr, "%s", request->connection)) < 0)
-    {
-        return 0;
-    }
-
-    bufptr += n;
-
-    if ((n = sprintf(bufptr, "%s", request->proxy_connection)) < 0)
-    {
-        return 0;
-    }
-
-    bufptr += n;
-
-    for (size_t i = 0; i < request->header_size; ++i)
-    {
-        if ((n = sprintf(bufptr, "%s", request->headers[i])) < 0)
-        {
-            return 0;
-        }
-
-        bufptr += n;
-    }
-
-    if ((n = sprintf(bufptr, "\r\n")) < 0)
-    {
-        return 0;
-    }
-
-    bufptr += n;
-
-    return bufptr - usrbuf;
-}
-
 const char *get_status_str(int status_code)
 {
     switch (status_code)
@@ -253,7 +140,7 @@ static int parse_request_line(char *usrbuf, size_t len, Request *request)
     return 1;
 }
 
-static int parse_header_line(char *usrbuf, size_t len, Request *request)
+static int parse_request_header(char *usrbuf, size_t len, Request *request)
 {
     token_t tokens[3];
     int num = split_line(tokens, 3, usrbuf, len, ':');
@@ -368,7 +255,7 @@ Request *parse_request(void *usrbuf)
 
     for (size_t i = 1; i < line_cnt; ++i)
     {
-        if (!parse_header_line(lines[i].token, lines[i].size, request))
+        if (!parse_request_header(lines[i].token, lines[i].size, request))
         {
             release_request(request);
             return NULL;
@@ -376,6 +263,50 @@ Request *parse_request(void *usrbuf)
     }
 
     return request;
+}
+
+int write_request(int fd, Request *request)
+{
+    char buffer[MAXLINE];
+
+    sprintf(buffer, "%s %s HTTP/1.0", request->method, request->uri);
+
+    if (rio_writen(fd, buffer, strlen(buffer)) < 0)
+    {
+        return -1;
+    }
+
+    sprintf(buffer, "Host: %s", request->host);
+
+    if (rio_writen(fd, buffer, strlen(buffer)) < 0)
+    {
+        return -1;
+    }
+
+    if (rio_writen(fd, request->user_agent, strlen(request->user_agent)) < 0)
+    {
+        return -1;
+    }
+
+    if (rio_writen(fd, request->connection, strlen(request->connection)) < 0)
+    {
+        return -1;
+    }
+
+    if (rio_writen(fd, request->proxy_connection, strlen(request->proxy_connection)) < 0)
+    {
+        return -1;
+    }
+
+    for (size_t i = 0; i < request->header_size; ++i)
+    {
+        if (rio_writen(fd, request->headers[i], strlen(request->headers[i])) < 0)
+        {
+            return -1;
+        }
+    }
+
+    return 0;
 }
 
 void debug_print_request(Request *request)
@@ -396,4 +327,122 @@ void debug_print_request(Request *request)
     {
         printf("%s", request->headers[i]);
     }
+}
+
+static Response *create_response()
+{
+    Response *resp = Malloc(sizeof(Response));
+    resp->content_type[0] = '\0';
+    resp->content_length = 0;
+    resp->status_code = 0;
+    resp->content = NULL;
+    return resp;
+}
+
+void release_response(Response *response)
+{
+    if (!response)
+    {
+        return;
+    }
+    Free(response->content);
+    Free(response);
+}
+
+static int parse_status_line(char *usrbuf, size_t len, Response *response)
+{
+    token_t tokens[4];
+    int token_cnt = split_line(tokens, 4, usrbuf, len, ' ');
+
+    /* illegal response */
+    if (token_cnt != 3)
+    {
+        return 0;
+    }
+
+    response->status_code = atoi(tokens[1].token);
+
+    if (response->status_code == 0)
+    {
+        return 0;
+    }
+
+    return 1;
+}
+
+static int parse_response_header(char *usrbuf, size_t len, Response *response)
+{
+    token_t tokens[3];
+    int token_cnt = split_line(tokens, 3, usrbuf, len, ':');
+
+    if (token_cnt < 2)
+    {
+        return 1;
+    }
+
+    if (strncasecmp(tokens[0].token, "Content-type", tokens[0].size) == 0)
+    {
+        memcpy(response->content_type, usrbuf, len);
+        response->content_type[len] = '\0';
+        return 1;
+    }
+
+    if (strncasecmp(tokens[0].token, "Content-length", tokens[0].size) == 0)
+    {
+        int length = atoi(tokens[1].token);
+
+        if (length == 0)
+        {
+            return 0;
+        }
+
+        response->content_length = length;
+        response->content = Malloc(length);
+        return 1;
+    }
+
+    return 1;
+}
+
+/*
+ * parse_response - parse given null-terminated string as HTTP response headers
+ * user responsibility to release returned pointer
+ */
+Response *parse_response(void *usrbuf)
+{
+    token_t lines[MAXLINE];
+    int line_cnt = split_line(lines, MAXLINE, usrbuf, strlen(usrbuf), '\n');
+
+    /* at least status line*/
+    if (line_cnt < 1)
+    {
+        return NULL;
+    }
+
+    Response *resp = create_response();
+
+    /* split status line */
+    if (!parse_status_line(lines[0].token, lines[0].size, resp))
+    {
+        release_response(resp);
+        return NULL;
+    }
+
+    for (size_t i = 0; i < line_cnt; ++i)
+    {
+        if (!parse_response_header(lines[i].token, lines[i].size, resp))
+        {
+            release_response(resp);
+            return NULL;
+        }
+    }
+
+    return resp;
+}
+
+void debug_print_response(Response *response)
+{
+    printf("Content-length: %ld\n", response->content_length);
+    printf("Status_code: %d\n", response->status_code);
+    printf("Content-type: %s\n", response->content_type);
 }
