@@ -18,6 +18,13 @@ queue_t *queue_create(int capacity)
 
 void queue_free(queue_t *queue)
 {
+    if (!queue)
+    {
+        return;
+    }
+
+    Free(queue->fd);
+    Free(queue);
 }
 
 int queue_get(queue_t *queue)

@@ -218,7 +218,7 @@ static int do_get(Request *request, int clientfd)
 
     if (rio_readnb(&rio, resp->content, resp->content_length) < 0)
     {
-        Free(resp);
+        release_response(resp);
         return BAD_GATEWAY;
     }
 
@@ -238,6 +238,9 @@ static int do_get(Request *request, int clientfd)
     {
         rio_writen(clientfd, resp->content, resp->content_length);
     }
+
+    release_response(resp);
+    Free(resp_headers);
 
     return OK;
 }
