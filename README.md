@@ -20,7 +20,7 @@ Score   Rating  Errors  Function
 Total points: 36/36
 ```
 
-## Attack Lab
+## Cache Lab
 ```
 $./test-trans -N 32 -M 32
 
