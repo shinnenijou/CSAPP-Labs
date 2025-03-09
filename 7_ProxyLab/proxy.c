@@ -10,6 +10,9 @@
 #define MAX_CACHE_SIZE 1049000
 #define MAX_OBJECT_SIZE 102400
 
+/* Receive timeout */
+#define RECV_TIMEOUT 5
+
 /* Work threads number */
 #define WORK_THREADS_NUM 4
 #define QUEUE_MAX_LEN 1024
@@ -25,6 +28,7 @@ static void serve(int fd);
 static int do_request(Request *request, int clientfd);
 static int do_get(Request *request, int clientfd);
 static void clienterror(int fd, char *cause, int errnum, char *longmsg);
+static int set_timeout(int fd, int secs);
 
 static void sigint_handler(int sig);
 static void sigpipe_handler(int sig);
@@ -121,7 +125,10 @@ static void *thread(void *arg)
 
     while ((fd = queue_get(queue)) > 0)
     {
-        serve(fd);
+        if (set_timeout(fd, RECV_TIMEOUT) >= 0)
+        {
+            serve(fd);
+        }
         Close(fd);
     }
 
@@ -190,6 +197,11 @@ static int do_get(Request *request, int clientfd)
     int fd = 0;
 
     if ((fd = open_clientfd(request->host, request->port)) < 0)
+    {
+        return BAD_GATEWAY;
+    }
+
+    if (set_timeout(fd, RECV_TIMEOUT) < 0)
     {
         return BAD_GATEWAY;
     }
@@ -290,4 +302,12 @@ static void sigint_handler(int sig)
 /* actual ignore SIGPIPE but will interrupt system call */
 static void sigpipe_handler(int sig)
 {
+}
+
+static int set_timeout(int socketfd, int secs)
+{
+    struct timeval timeout;
+    timeout.tv_sec = secs;
+    timeout.tv_usec = 0;
+    return setsockopt(socketfd, SOL_SOCKET, SO_RCVTIMEO, &timeout, sizeof(timeout));
 }
